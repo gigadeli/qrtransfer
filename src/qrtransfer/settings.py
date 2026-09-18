@@ -66,6 +66,25 @@ class Settings:
         self._q.setValue("receiver/autofocus", bool(v))
 
     @property
+    def camera_strategy(self) -> str:
+        """カメラの接続方式（"auto" = 実測して最速のものを選ぶ）。"""
+        from .camera import STRATEGY_AUTO, STRATEGY_KEYS
+        v = str(self._q.value("receiver/camera_strategy", STRATEGY_AUTO))
+        return v if v == STRATEGY_AUTO or v in STRATEGY_KEYS else STRATEGY_AUTO
+
+    @camera_strategy.setter
+    def camera_strategy(self, v: str) -> None:
+        self._q.setValue("receiver/camera_strategy", v)
+
+    def preferred_strategy(self, index: int, width: int, height: int) -> str | None:
+        """前回「自動」で選ばれた接続方式（カメラと解像度ごと）。"""
+        v = self._q.value(f"camera_modes/cam{index}_{width}x{height}", "")
+        return str(v) if v else None
+
+    def set_preferred_strategy(self, index: int, width: int, height: int, strategy: str) -> None:
+        self._q.setValue(f"camera_modes/cam{index}_{width}x{height}", strategy)
+
+    @property
     def manual_focus(self) -> int:
         """オートフォーカス OFF のときのフォーカス値（-1 = カメラの値のまま）。"""
         return self._int("receiver/manual_focus", -1, -1, 1023)

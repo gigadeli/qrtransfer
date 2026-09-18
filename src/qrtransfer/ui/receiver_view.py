@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QGridL
 
 from .. import assembler as asm_mod
 from .. import protocol
-from ..camera import FOCUS_MAX, FOCUS_MIN, CameraThread, probe_cameras
+from ..camera import FOCUS_MAX, FOCUS_MIN, STRATEGIES, STRATEGY_AUTO, CameraMode, CameraThread, probe_cameras
 from ..decoder import DecodeThread, Detection
 from ..settings import RESOLUTIONS, Settings
 from .chunk_map import ChunkMapWidget
@@ -136,6 +136,19 @@ class ReceiverView(QWidget):
         # 2 行目: 読み取り精度（ボケ対策）
         cl2 = QHBoxLayout()
         cam_rows.addLayout(cl2)
+        self.combo_strategy = QComboBox()
+        self.combo_strategy.addItem("自動（実測して最速を選ぶ）", STRATEGY_AUTO)
+        for key, label in STRATEGIES:
+            self.combo_strategy.addItem(label, key)
+        self.combo_strategy.setToolTip(
+            "カメラとの接続方式。カメラによって出せる fps が変わります。\n"
+            "「自動」は受信開始時にいくつかの方式を試して fps を実測し、最も速いものを使います\n"
+            "（初回は数秒かかります。選ばれた方式は保存され、次回からは速く開きます）。")
+        i = self.combo_strategy.findData(settings.camera_strategy)
+        self.combo_strategy.setCurrentIndex(max(0, i))
+        self.combo_strategy.currentIndexChanged.connect(self._apply_strategy)
+        cl2.addWidget(QLabel("接続方式"))
+        cl2.addWidget(self.combo_strategy)
         self.chk_enhance = QCheckBox("画像補正（ボケ・低コントラスト対策）")
         self.chk_enhance.setToolTip("読み取れないときに、シャープ化・拡大・コントラスト強調をかけて再試行します。\n"
                                     "効いた補正を学習して、次からはそれを先に試します。")
@@ -287,6 +300,8 @@ class ReceiverView(QWidget):
         self._decode_fps = 0.0
         self._camera_fps = 0.0
         self._decode_stats: dict | None = None
+        self._camera_warning = ""
+        self._reading_hint = ""
 
     # ------------------------------------------------------------------ 設定
     def _apply_output_dir(self) -> None:
@@ -306,6 +321,34 @@ class ReceiverView(QWidget):
         self.settings.auto_extract_zip = on
         self.assembler.auto_extract_zip = on
         self.settings.sync()
+
+    def _apply_strategy(self, _index: int) -> None:
+        self.settings.camera_strategy = self.combo_strategy.currentData()
+        self.settings.sync()
+        if self.camera is not None:  # 受信中なら新しい方式で開き直す
+            self.stop_camera()
+            self.start_camera()
+
+    def _on_mode_selected(self, mode: CameraMode) -> None:
+        cam = self.camera
+        if cam is not None and cam.strategy == STRATEGY_AUTO:
+            self.settings.set_preferred_strategy(cam.index, cam.width, cam.height, mode.strategy)
+            self.settings.sync()
+        self._camera_warning = self.camera_fps_warning(mode)
+        self._update_hint()
+
+    @staticmethod
+    def camera_fps_warning(mode: CameraMode) -> str:
+        if mode.fps >= 20:
+            return ""
+        return (f"⚠ カメラの実測が {mode.fps:.0f} fps（{mode.backend}, {mode.width}×{mode.height}, {mode.fourcc}）と低めです。"
+                "「接続方式」を変える・解像度を 1280×720 にする・部屋や画面を明るくする"
+                "（暗いと露光時間が延びて fps が落ちるカメラがあります）を試してください。")
+
+    def _update_hint(self) -> None:
+        parts = [t for t in (self._camera_warning, self._reading_hint) if t]
+        self.hint_bar.setText("\n".join(parts))
+        self.hint_bar.setVisible(bool(parts))
 
     def _apply_enhance(self, on: bool) -> None:
         self.settings.enhance = on
@@ -350,8 +393,8 @@ class ReceiverView(QWidget):
         self._decode_stats = info
         sharp = info.get("sharpness")
         self.lbl_sharp.setText(f"ピント: {sharp:.0f}" if sharp is not None else "ピント: -")
-        self.hint_bar.setText(self.reading_hint(info["window"]))
-        self.hint_bar.setVisible(bool(self.hint_bar.text()))
+        self._reading_hint = self.reading_hint(info["window"])
+        self._update_hint()
 
     @staticmethod
     def reading_hint(w) -> str:
@@ -408,7 +451,10 @@ class ReceiverView(QWidget):
         self.settings.autofocus = self.chk_af.isChecked()
         self.settings.sync()
         manual_focus = self.slider_focus.value() if self.settings.manual_focus >= 0 else -1
-        self.camera = CameraThread(idx, w, h, self.chk_af.isChecked(), manual_focus, self)
+        strategy = self.combo_strategy.currentData()
+        self.camera = CameraThread(idx, w, h, self.chk_af.isChecked(), manual_focus, strategy=strategy,
+                                   preferred=self.settings.preferred_strategy(idx, w, h), parent=self)
+        self.camera.mode_selected.connect(self._on_mode_selected)
         self.decoder = DecodeThread(self.camera.source, self.assembler, enhance=self.chk_enhance.isChecked(),
                                     parent=self)
         self.camera.preview.connect(self.preview.set_image)
@@ -419,10 +465,12 @@ class ReceiverView(QWidget):
         self.decoder.decode_fps.connect(lambda f: setattr(self, "_decode_fps", f))
         self.decoder.stats.connect(self._on_decode_stats)
         self.decoder.error.connect(lambda m: self.status.setText(f"⚠ 読み取り処理でエラー: {m}"))
-        self.preview.message = "カメラを開いています…"
+        opening = ("カメラに接続しています（接続方式を調べて fps を実測するため、数秒かかることがあります）…"
+                   if strategy == STRATEGY_AUTO else "カメラを開いています…")
+        self.preview.message = opening
         self.preview.image = None
         self.preview.update()
-        self.lbl_cam.setText("カメラを開いています…")
+        self.lbl_cam.setText("カメラに接続しています…")
         self.btn_camera.setText("受信停止")
         self.camera.start()
         self.decoder.start()
@@ -442,6 +490,7 @@ class ReceiverView(QWidget):
         self.preview.image = None
         self.preview.message = "カメラ停止中"
         self._decode_stats = None
+        self._camera_warning = self._reading_hint = ""
         self.hint_bar.hide()
         self.lbl_sharp.setText("ピント: -")
         self.preview.update()

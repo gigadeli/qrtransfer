@@ -7,7 +7,11 @@
 """
 
 import multiprocessing
+import os
 import sys
+
+# MSMF（Media Foundation）でカメラを開くのに数十秒かかる既知の問題を避ける（cv2 の読み込み前に設定する）
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
 
 
 def main() -> int:
