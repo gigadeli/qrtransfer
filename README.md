@@ -7,6 +7,11 @@
 - 対象 OS: Windows 10 / 11（64bit）
 - 配布形態: `QRTransfer.exe` 単体（実行環境に Python は不要）
 
+## ダウンロード
+[Releases](https://github.com/gigadeli/qrtransfer/releases/latest) から `QRTransfer.exe` をダウンロードして実行します
+（インストール不要）。`QRTransfer.exe.sha256` は改ざん確認用のハッシュ値です。
+初回起動時に Windows SmartScreen の警告が出た場合は、「詳細情報」→「実行」を選んでください（コード署名をしていないため）。
+
 ## 使い方
 
 ### 送信側
@@ -162,5 +167,13 @@ build.bat onedir
 
 `dist\QRTransfer\` フォルダごと持ち込み、中の `QRTransfer.exe` を起動します。
 
-### GitHub Actions（任意）
-`.github/workflows/build.yml` で `windows-latest` 上のビルドとテストを行い、exe を成果物としてアップロードします。
+### GitHub Actions（自動ビルドとリリース）
+`.github/workflows/build.yml` で `windows-latest` 上のテスト・ビルド・exe のセルフテストを行います。
+- ブランチへの push / PR: exe を Actions の成果物（Artifacts）としてアップロードします。
+- `v` で始まるタグの push: 同じ手順の後、exe と SHA-256 を添付した GitHub Release を自動で作成します。
+
+リリースの手順（`src/qrtransfer/__init__.py` の `__version__` とタグを一致させる。違うとビルドが止まります）:
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
