@@ -10,7 +10,7 @@ from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QImage, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
                                QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-                               QSizePolicy, QSlider, QSplitter, QVBoxLayout, QWidget)
+                               QScrollArea, QSizePolicy, QSlider, QSplitter, QVBoxLayout, QWidget)
 
 from .. import assembler as asm_mod
 from .. import protocol
@@ -18,6 +18,7 @@ from ..calibration import CalibrationResult, exposure_label
 from ..camera import FOCUS_MAX, FOCUS_MIN, STRATEGIES, STRATEGY_AUTO, CameraMode, CameraThread, probe_cameras
 from ..decoder import DecodeThread, Detection
 from ..settings import RESOLUTIONS, Settings
+from . import theme
 from .chunk_map import ChunkMapWidget
 from .sender_view import human_size, human_time
 
@@ -54,14 +55,17 @@ class PreviewWidget(QWidget):
         inner = QRectF(18, 14, self.width() - 36, 1000)
         bound = p.boundingRect(inner, Qt.TextFlag.TextWordWrap, self.overlay)
         box = QRectF(8, 8, self.width() - 16, bound.height() + 26)
-        p.fillRect(box, QColor(0, 0, 0, 170))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(12, 14, 18, 200))
+        p.drawRoundedRect(box, 10, 10)
         p.setPen(QColor(255, 255, 255))
         p.drawText(QRectF(18, 14, self.width() - 36, bound.height() + 4), Qt.TextFlag.TextWordWrap, self.overlay)
         if self.overlay_progress >= 0:
-            bar = QRectF(box.left() + 10, box.bottom() - 9, box.width() - 20, 4)
-            p.fillRect(bar, QColor(90, 90, 90))
-            p.fillRect(QRectF(bar.left(), bar.top(), bar.width() * self.overlay_progress, bar.height()),
-                       QColor(60, 170, 255))
+            bar = QRectF(box.left() + 10, box.bottom() - 10, box.width() - 20, 4)
+            p.setBrush(QColor(255, 255, 255, 50))
+            p.drawRoundedRect(bar, 2, 2)
+            p.setBrush(QColor(theme.tokens().accent))
+            p.drawRoundedRect(QRectF(bar.left(), bar.top(), bar.width() * self.overlay_progress, bar.height()), 2, 2)
 
     def set_image(self, img: QImage) -> None:
         self.image = img
@@ -75,9 +79,11 @@ class PreviewWidget(QWidget):
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(30, 30, 30))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setClipPath(theme.rounded_rect_path(QRectF(self.rect()), 14))
+        p.fillRect(self.rect(), QColor(theme.tokens().preview_bg))
         if self.image is None:
-            p.setPen(QColor(220, 220, 220))
+            p.setPen(QColor(170, 176, 186))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.message)
             self._draw_overlay(p)
             return
@@ -129,17 +135,24 @@ class ReceiverView(QWidget):
         self.last_result: asm_mod.CompletionResult | None = None
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(20, 14, 20, 14)
+        root.setSpacing(12)
         header = QHBoxLayout()
         back = QPushButton("← 戻る")
+        back.setProperty("variant", "ghost")
         back.clicked.connect(self.back_requested)
         header.addWidget(back)
-        header.addWidget(QLabel("<b>受信モード</b>"))
+        title = QLabel("受信モード")
+        title.setProperty("role", "title")
+        header.addWidget(title)
         header.addStretch(1)
         root.addLayout(header)
 
         # カメラ設定
         cam_box = QGroupBox("カメラ")
         cam_rows = QVBoxLayout(cam_box)
+        cam_rows.setContentsMargins(12, 4, 12, 12)
+        cam_rows.setSpacing(10)
         cl = QHBoxLayout()
         cam_rows.addLayout(cl)
         self.combo_cam = QComboBox()
@@ -154,9 +167,11 @@ class ReceiverView(QWidget):
         self.chk_af = QCheckBox("オートフォーカス")
         self.chk_af.setChecked(settings.autofocus)
         self.btn_camera = QPushButton("受信開始")
-        self.btn_camera.setMinimumWidth(110)
+        self.btn_camera.setMinimumWidth(120)
+        self.btn_camera.setProperty("variant", "primary")
         self.btn_camera.clicked.connect(self.toggle_camera)
         self.lbl_cam = QLabel("")
+        self.lbl_cam.setProperty("role", "muted")
         for w in (self.combo_cam, self.btn_probe, QLabel("解像度"), self.combo_res, self.chk_af, self.btn_camera):
             cl.addWidget(w)
         cl.addWidget(self.lbl_cam, 1)
@@ -197,6 +212,7 @@ class ReceiverView(QWidget):
         self.lbl_focus_value = QLabel("")
         self.lbl_focus_value.setMinimumWidth(36)
         self.lbl_sharp = QLabel("ピント: -")
+        self.lbl_sharp.setProperty("role", "muted")
         self.lbl_sharp.setToolTip("QR 付近の輪郭のくっきり度合い（目安）。大きいほどピントが合っています。")
         self.chk_af.toggled.connect(self._apply_autofocus)
         for w in (self.chk_enhance, self.lbl_focus, self.slider_focus, self.lbl_focus_value, self.lbl_sharp):
@@ -220,7 +236,9 @@ class ReceiverView(QWidget):
         self.btn_calib_reset.setToolTip("固定したピント・露出をやめて、オートフォーカス・自動露出に戻します。")
         self.btn_calib_reset.clicked.connect(self.reset_calibration)
         self.lbl_exposure = QLabel("")
+        self.lbl_exposure.setProperty("role", "muted")
         self.lbl_calib = QLabel("")
+        self.lbl_calib.setProperty("role", "muted")
         self.lbl_calib.setWordWrap(True)
         for w in (self.btn_calib, self.chk_calib_start, self.btn_calib_reset, self.lbl_exposure):
             cl3.addWidget(w)
@@ -233,12 +251,16 @@ class ReceiverView(QWidget):
         self.hint_bar = QLabel("")
         self.hint_bar.setObjectName("hintBar")
         self.hint_bar.setWordWrap(True)
-        self.hint_bar.setStyleSheet("#hintBar{border:2px solid #d9a400;border-radius:4px;padding:6px}")
+        self.hint_bar.setProperty("tone", "warning")
         self.hint_bar.hide()
         root.addWidget(self.hint_bar)
 
         # 保存先
-        out_box = QHBoxLayout()
+        out_card = QFrame()
+        out_card.setProperty("role", "card")
+        out_box = QHBoxLayout(out_card)
+        out_box.setContentsMargins(14, 8, 14, 8)
+        out_box.setSpacing(10)
         out_box.addWidget(QLabel("保存先"))
         self.edit_out = QLineEdit(settings.output_dir)
         self.edit_out.editingFinished.connect(self._apply_output_dir)
@@ -250,20 +272,24 @@ class ReceiverView(QWidget):
         out_box.addWidget(self.edit_out, 1)
         out_box.addWidget(btn_out)
         out_box.addWidget(self.chk_zip)
-        root.addLayout(out_box)
+        root.addWidget(out_card)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
         self.preview = PreviewWidget()
         splitter.addWidget(self.preview)
 
         right = QWidget()
+        right.setObjectName("rightPanel")
+        right.setMinimumHeight(420)  # 帯がいくつも出たときは縮めずにスクロールさせる（文字が重ならないように）
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(12)
 
         # 別の転送を検出
         self.conflict_bar = QFrame()
         self.conflict_bar.setObjectName("conflictBar")
-        self.conflict_bar.setStyleSheet("#conflictBar{border:2px solid #d9a400;border-radius:4px}")
+        self.conflict_bar.setProperty("tone", "warning")
         cbl = QHBoxLayout(self.conflict_bar)
         self.lbl_conflict = QLabel("別の転送を検出")
         self.lbl_conflict.setWordWrap(True)
@@ -277,6 +303,7 @@ class ReceiverView(QWidget):
         # 完了表示
         self.done_bar = QFrame()
         self.done_bar.setObjectName("doneBar")
+        self.done_bar.setProperty("tone", "success")
         dbl = QVBoxLayout(self.done_bar)
         self.lbl_done = QLabel("")
         self.lbl_done.setWordWrap(True)
@@ -285,6 +312,7 @@ class ReceiverView(QWidget):
         self.btn_open = QPushButton("フォルダを開く")
         self.btn_open.clicked.connect(self.open_folder)
         self.btn_next = QPushButton("次の受信へ")
+        self.btn_next.setProperty("variant", "primary")
         self.btn_next.clicked.connect(self.next_transfer)
         dbtns.addWidget(self.btn_open)
         dbtns.addWidget(self.btn_next)
@@ -296,6 +324,9 @@ class ReceiverView(QWidget):
 
         info = QGroupBox("進捗")
         grid = QGridLayout(info)
+        grid.setContentsMargins(12, 4, 12, 12)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(8)
         self.lbl_name = QLabel("メタ情報待ち")
         self.lbl_name.setWordWrap(True)
         self.lbl_session = QLabel("-")
@@ -304,24 +335,22 @@ class ReceiverView(QWidget):
         self.progress.setFormat("%p%")
         self.lbl_rate = QLabel("-")
         self.lbl_eta = QLabel("-")
-        grid.addWidget(QLabel("ファイル"), 0, 0)
-        grid.addWidget(self.lbl_name, 0, 1)
-        grid.addWidget(QLabel("セッション"), 1, 0)
-        grid.addWidget(self.lbl_session, 1, 1)
-        grid.addWidget(QLabel("受信率"), 2, 0)
-        grid.addWidget(self.progress, 2, 1)
-        grid.addWidget(QLabel("受信速度"), 3, 0)
-        grid.addWidget(self.lbl_rate, 3, 1)
-        grid.addWidget(QLabel("残り時間"), 4, 0)
-        grid.addWidget(self.lbl_eta, 4, 1)
+        for row, (label, w) in enumerate((("ファイル", self.lbl_name), ("セッション", self.lbl_session),
+                                          ("受信率", self.progress), ("受信速度", self.lbl_rate),
+                                          ("残り時間", self.lbl_eta))):
+            key = QLabel(label)
+            key.setProperty("role", "muted")
+            grid.addWidget(key, row, 0)
+            grid.addWidget(w, row, 1)
         grid.setColumnStretch(1, 1)
-        rl.addWidget(info)
-
         self.chunk_map = ChunkMapWidget()
-        rl.addWidget(self.chunk_map, 1)
+        grid.addWidget(self.chunk_map, 5, 0, 1, 2)
+        grid.setRowStretch(5, 1)
+        rl.addWidget(info, 1)
 
         miss_box = QGroupBox("欠落番号（送信側で R キーを押して入力すると再送モードになります）")
         ml = QVBoxLayout(miss_box)
+        ml.setContentsMargins(12, 4, 12, 12)
         self.txt_missing = QPlainTextEdit()
         self.txt_missing.setReadOnly(True)
         self.txt_missing.setMaximumHeight(80)
@@ -337,12 +366,21 @@ class ReceiverView(QWidget):
         ml.addLayout(mbtns)
         rl.addWidget(miss_box)
 
-        splitter.addWidget(right)
+        right_scroll = QScrollArea()
+        right_scroll.setObjectName("rightScroll")
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        right_scroll.setWidget(right)
+        # スクロールは縦だけ。横幅は中身（欠落番号の見出しなど）が収まる幅より狭くしない
+        right_scroll.setMinimumWidth(right.minimumSizeHint().width() + 14)
+        splitter.addWidget(right_scroll)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         root.addWidget(splitter, 1)
 
         self.status = QLabel("")
+        self.status.setProperty("role", "muted")
         root.addWidget(self.status)
 
         self.timer = QTimer(self)
@@ -610,6 +648,7 @@ class ReceiverView(QWidget):
         self.preview.update()
         self.lbl_cam.setText("カメラに接続しています…")
         self.btn_camera.setText("受信停止")
+        theme.set_prop(self.btn_camera, "variant", "")
         self.camera.start()
         self.decoder.start()
 
@@ -627,6 +666,7 @@ class ReceiverView(QWidget):
             self._set_calibrating(False)
         self.assembler.flush()
         self.btn_camera.setText("受信開始")
+        theme.set_prop(self.btn_camera, "variant", "primary")
         self.lbl_cam.setText("")
         self.preview.image = None
         self.preview.message = "カメラ停止中"
@@ -740,7 +780,7 @@ class ReceiverView(QWidget):
         self.refresh()
         self.last_result = result
         if result.ok:
-            self.done_bar.setStyleSheet("#doneBar{border:2px solid #2ea043;border-radius:4px}")
+            theme.set_prop(self.done_bar, "tone", "success")
             extra = ""
             if result.extract_report and result.extract_report.skipped:
                 extra = "<br>スキップした項目: " + ", ".join(n for n, _ in result.extract_report.skipped[:10])
@@ -750,7 +790,7 @@ class ReceiverView(QWidget):
                 f"　所要時間: {human_time(result.elapsed_sec)}<br>{result.message}{extra}")
             self.btn_open.setEnabled(True)
         else:
-            self.done_bar.setStyleSheet("#doneBar{border:2px solid #d9534f;border-radius:4px}")
+            theme.set_prop(self.done_bar, "tone", "danger")
             self.lbl_done.setText(f"<b style='color:#d9534f'>受信失敗（照合結果: NG）</b><br>{result.name}<br>{result.message}<br>"
                                   "データは保存していません。送信をやり直してください。")
             self.btn_open.setEnabled(False)

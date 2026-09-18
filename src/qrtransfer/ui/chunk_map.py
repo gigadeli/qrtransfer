@@ -5,15 +5,14 @@ from __future__ import annotations
 import math
 
 import numpy as np
-from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import QSizePolicy, QToolTip, QWidget
 
+from . import theme
+
 MAX_CELLS = 2000
 MAX_CELL_PX = 24
-COLOR_DONE = QColor(46, 160, 67)
-COLOR_PARTIAL = QColor(150, 205, 120)
-COLOR_NONE = QColor(200, 200, 200)
 
 
 class ChunkMapWidget(QWidget):
@@ -56,20 +55,33 @@ class ChunkMapWidget(QWidget):
         cell = max(1, min(w // cols, h // rows, MAX_CELL_PX))
         return cols, rows, cell
 
+    def _origin(self, cols: int, cell: int) -> int:
+        return max(0, (self.width() - cols * cell) // 2)  # 横方向は中央に寄せる
+
     def paintEvent(self, event) -> None:
+        t = theme.tokens()
         p = QPainter(self)
-        p.fillRect(self.rect(), self.palette().window())
         n = len(self.cells)
         if n == 0:
-            p.setPen(self.palette().text().color())
+            p.setPen(QColor(t.muted))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "チャンクマップ（受信待ち）")
             return
+        done, partial, none = QColor(t.chunk_done), QColor(t.chunk_partial), QColor(t.chunk_none)
         cols, rows, cell = self._layout()
-        gap = 1 if cell >= 4 else 0
+        gap = 2 if cell >= 10 else (1 if cell >= 4 else 0)
+        radius = min(3.0, (cell - gap) / 4) if cell >= 6 else 0
+        ox = self._origin(cols, cell)
+        if radius:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
         for i, v in enumerate(self.cells):
-            color = COLOR_DONE if v >= 1.0 else (COLOR_PARTIAL if v > 0 else COLOR_NONE)
+            p.setBrush(done if v >= 1.0 else (partial if v > 0 else none))
             r, c = divmod(i, cols)
-            p.fillRect(QRect(c * cell, r * cell, cell - gap, cell - gap), color)
+            rect = QRectF(ox + c * cell, r * cell, cell - gap, cell - gap)
+            if radius:
+                p.drawRoundedRect(rect, radius, radius)
+            else:
+                p.drawRect(rect)
 
     def mouseMoveEvent(self, event) -> None:
         n = len(self.cells)
@@ -77,7 +89,7 @@ class ChunkMapWidget(QWidget):
             return
         cols, rows, cell = self._layout()
         pos = event.position().toPoint()
-        c, r = pos.x() // cell, pos.y() // cell
+        c, r = (pos.x() - self._origin(cols, cell)) // cell, pos.y() // cell
         i = r * cols + c
         if 0 <= c < cols and 0 <= i < n:
             start = i * self.per_cell

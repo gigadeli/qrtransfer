@@ -5,18 +5,19 @@ from __future__ import annotations
 import os
 import sys
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
                                QFormLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMainWindow, QMessageBox, QPushButton, QSpinBox, QStackedWidget, QVBoxLayout,
-                               QWidget)
+                               QMainWindow, QMessageBox, QPushButton, QSpinBox, QStackedWidget, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__, packer, qrgen
 from ..assembler import Assembler, IncompleteSession
 from ..settings import FPS_MAX, FPS_MIN, RESOLUTIONS, Settings
 from .fullscreen_qr import FullscreenQR
 from .receiver_view import ReceiverView
+from . import theme
 from .sender_view import SenderView, human_size
 
 
@@ -25,12 +26,21 @@ def resource_path(rel: str) -> str:
     return os.path.join(base, rel)
 
 
+def _section(text: str) -> QLabel:
+    label = QLabel(text)
+    label.setProperty("role", "section")
+    return label
+
+
 class SettingsDialog(QDialog):
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
         self.settings = settings
         self.setWindowTitle("設定")
         form = QFormLayout(self)
+        form.setContentsMargins(22, 18, 22, 18)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(10)
 
         self.spin_cam = QSpinBox()
         self.spin_cam.setRange(0, 5)
@@ -71,22 +81,26 @@ class SettingsDialog(QDialog):
         self.chk_zip = QCheckBox("受信した .zip を自動で展開する")
         self.chk_zip.setChecked(settings.auto_extract_zip)
 
-        form.addRow(QLabel("<b>受信</b>"))
+        form.addRow(_section("受信"))
         form.addRow("カメラのインデックス", self.spin_cam)
         form.addRow("解像度", self.combo_res)
         form.addRow("", self.chk_af)
         form.addRow("保存先", out_row)
         form.addRow("", self.chk_zip)
-        form.addRow(QLabel("<b>送信</b>"))
+        form.addRow(_section("送信"))
         form.addRow("表示速度 (fps)", self.spin_fps)
         form.addRow("チャンクサイズ (バイト)", self.spin_chunk)
         form.addRow("誤り訂正レベル (ECC)", self.combo_ecc)
         form.addRow("QR の表示方法", self.combo_display)
         form.addRow("", self.chk_on_top)
         form.addRow("", self.chk_wait)
-        form.addRow(QLabel(f"設定ファイル: {settings._q.fileName()}"))
+        path_label = QLabel(f"設定ファイル: {settings._q.fileName()}")
+        path_label.setProperty("role", "muted")
+        path_label.setWordWrap(True)
+        form.addRow(path_label)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setProperty("variant", "primary")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
@@ -124,6 +138,8 @@ class ResumeDialog(QDialog):
         self.choice: IncompleteSession | None = None
         self.discard_all = False
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(22, 18, 22, 18)
+        lay.setSpacing(12)
         lay.addWidget(QLabel("前回、途中で終了した受信があります。再開しますか？\n"
                              "（再開すると受信モードに移ります。送信側で同じ転送を表示してください）"))
         self.list = QListWidget()
@@ -143,6 +159,8 @@ class ResumeDialog(QDialog):
         b_resume.clicked.connect(self._resume)
         b_discard.clicked.connect(self._discard)
         b_later.clicked.connect(self.reject)
+        b_resume.setProperty("variant", "primary")
+        b_later.setProperty("variant", "ghost")
         row.addWidget(b_resume)
         row.addWidget(b_discard)
         row.addStretch(1)
@@ -166,42 +184,65 @@ class StartPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 20)
         lay.addStretch(1)
         title = QLabel(APP_NAME)
-        f = QFont(title.font())
-        f.setPointSize(26)
-        f.setBold(True)
-        title.setFont(f)
+        title.setProperty("role", "hero")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(title)
+        lay.addSpacing(6)
         sub = QLabel("QR コードの表示とカメラの読み取りで、ファイルを一方向に転送します")
+        sub.setProperty("role", "muted")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(sub)
-        lay.addSpacing(30)
+        lay.addSpacing(36)
         row = QHBoxLayout()
+        row.setSpacing(20)
         row.addStretch(1)
-        self.btn_send = QPushButton("送信")
-        self.btn_recv = QPushButton("受信")
-        for b in (self.btn_send, self.btn_recv):
-            b.setMinimumSize(200, 110)
-            bf = QFont(b.font())
-            bf.setPointSize(18)
-            b.setFont(bf)
-            row.addWidget(b)
-            row.addSpacing(20)
+        self.btn_send = self._tile("送信", "send")
+        self.btn_recv = self._tile("受信", "receive")
+        row.addWidget(self.btn_send)
+        row.addWidget(self.btn_recv)
         row.addStretch(1)
         lay.addLayout(row)
-        lay.addSpacing(20)
+        lay.addSpacing(18)
         srow = QHBoxLayout()
         srow.addStretch(1)
         self.btn_settings = QPushButton("設定…")
+        self.btn_settings.setProperty("variant", "ghost")
         srow.addWidget(self.btn_settings)
         srow.addStretch(1)
         lay.addLayout(srow)
         lay.addStretch(2)
         ver = QLabel(f"v{__version__}")
+        ver.setProperty("role", "muted")
         ver.setAlignment(Qt.AlignmentFlag.AlignRight)
         lay.addWidget(ver)
+
+    @staticmethod
+    def _tile(text: str, kind: str) -> QToolButton:
+        b = QToolButton()
+        b.setText(text)
+        b.setProperty("variant", "tile")
+        b.setProperty("icon_kind", kind)
+        b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        b.setIconSize(QSize(52, 52))
+        b.setFixedSize(220, 160)
+        b.setCursor(Qt.CursorShape.PointingHandCursor)
+        StartPage._update_tile_icon(b)
+        return b
+
+    @staticmethod
+    def _update_tile_icon(b: QToolButton) -> None:
+        img = theme.make_icon(b.property("icon_kind"), theme.tokens().accent, 128)
+        b.setIcon(QIcon(QPixmap.fromImage(img)))
+
+    def changeEvent(self, event) -> None:
+        # テーマ（ライト／ダーク）が切り替わったら、アイコンの色も合わせる
+        if event.type() in (event.Type.PaletteChange, event.Type.StyleChange):
+            for b in (self.btn_send, self.btn_recv):
+                self._update_tile_icon(b)
+        super().changeEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -320,6 +361,8 @@ def run(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationVersion(__version__)
+    theme.apply(app)
+    theme.follow_system(app)
     win = MainWindow()
     win.show()
     from PySide6.QtCore import QTimer
