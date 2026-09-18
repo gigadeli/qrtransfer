@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest -q
+      - name: Build exe
+        run: pyinstaller --noconfirm QRTransfer.spec
+      - name: Self-test exe
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist\QRTransfer.exe -ArgumentList "--selftest","--quiet" -Wait -PassThru
+          Get-Content "$env:LOCALAPPDATA\QRTransfer\selftest.log"
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QRTransfer
+          path: dist/QRTransfer.exe

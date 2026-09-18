@@ -1,0 +1,8 @@
+PySide6>=6.7
+segno>=1.6
+zxing-cpp>=2.2
+opencv-python-headless>=4.9
+numpy>=1.26
+pyinstaller>=6.6
+pytest>=8.0
+Pillow>=10.0        # テストで QR を画像化するため
