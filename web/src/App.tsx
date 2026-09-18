@@ -25,6 +25,25 @@ export function humanTime(sec: number): string {
 /** 取りこぼしがこの割合を超えたら、送信側の設定を見直すよう知らせる */
 const LOSS_WARN = 0.3;
 
+const HUD_KEY = "qrtransfer.hud";
+
+/** 「進捗を映像に表示」の設定（この端末のブラウザに覚える。使えない環境では既定の ON） */
+function loadHud(): boolean {
+  try {
+    return localStorage.getItem(HUD_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function saveHud(on: boolean): void {
+  try {
+    localStorage.setItem(HUD_KEY, on ? "1" : "0");
+  } catch {
+    /* 保存できなくても動作には関係ない */
+  }
+}
+
 function saveFile(file: ReceivedFile): void {
   // 種類は常に octet-stream にする。download 属性を無視するブラウザ（アプリ内ブラウザなど）でも、
   // 受信した HTML・SVG がこのサイトのページとして開かれ、中のスクリプトが動くことがないように
@@ -54,6 +73,8 @@ export default function App() {
   const [snap, setSnap] = useState<Snapshot>(() => assembler.snapshot());
   const [version, setVersion] = useState(0);
   const [enhance, setEnhanceState] = useState(true);
+  // カメラの映像に進捗を重ねて表示する（スクロールせずに確認でき、スマホを動かさずに済む）
+  const [hud, setHud] = useState(loadHud);
   const [copied, setCopied] = useState(false);
   const dirty = useRef(true);
 
@@ -142,6 +163,32 @@ export default function App() {
               ))}
             </svg>
           )}
+          {scanner.running && hud && !result && (
+            <div className="hud" aria-live="off">
+              {snap.sessionId === null ? (
+                <span className="hud-line">転送待ち</span>
+              ) : (
+                <>
+                  <div className="hud-line">
+                    <b>{snap.finishing ? "照合中…" : `${(frac * 100).toFixed(frac < 1 ? 1 : 0)}%`}</b>
+                    <span>
+                      {repairing ? `修復 ${snap.pending} / ${lacking}` : `${snap.received} / ${snap.total}`}
+                    </span>
+                    {snap.etaSec !== null && <span>残り {humanTime(snap.etaSec)}</span>}
+                    {snap.loss !== null && (
+                      <span className={lossHigh ? "hud-warn" : undefined}>取りこぼし {Math.round(snap.loss * 100)}%</span>
+                    )}
+                  </div>
+                  <div className="bar hud-bar">
+                    <div style={{ width: `${((snap.total ? snap.received / snap.total : frac) * 100).toFixed(2)}%` }} />
+                    {snap.pending > 0 && (
+                      <div className="pending" style={{ width: `${((snap.pending / snap.total) * 100).toFixed(2)}%` }} />
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           {!scanner.running && (
             <div className="placeholder">
               <button className="primary big" onClick={() => void scanner.start()}>
@@ -166,6 +213,17 @@ export default function App() {
             <label className="switch">
               <input type="checkbox" checked={enhance} onChange={(e) => toggleEnhance(e.target.checked)} />
               <span>画像補正</span>
+            </label>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={hud}
+                onChange={(e) => {
+                  setHud(e.target.checked);
+                  saveHud(e.target.checked);
+                }}
+              />
+              <span>進捗を映像に表示</span>
             </label>
             <button className="ghost" onClick={scanner.stop}>
               停止
