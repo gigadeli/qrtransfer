@@ -162,8 +162,17 @@ def test_send_with_repair_qr(env, tmp_path, app):
     app.processEvents()
     assert fs.repairs == len(repairs)
     shown = 0
+    checked_ui = False
     for _ in range(len(fs.order)):
         seq = fs.current_seq()
+        if packer.repair_index(seq) is not None and not checked_ui and receiver.assembler.snapshot().repair:
+            # 修復用 QR を受け取ったら、欠落番号（再送用）は出さない。進み具合は修復用の式も含めて進む
+            receiver.refresh()
+            snap = receiver.assembler.snapshot()
+            assert not receiver.txt_missing.isVisibleTo(receiver) and not receiver.btn_copy.isVisibleTo(receiver)
+            assert receiver.btn_discard.isVisibleTo(receiver)
+            assert receiver.progress.value() == int((snap.received + snap.pending) / snap.total * 1000)
+            checked_ui = True
         if seq == packer.CAROUSEL_META or packer.repair_index(seq) is not None or seq % 3 != 1:
             _, statuses = process_image(camera_like(qimage_to_bgr(fs.grab().toImage())), receiver.assembler)
             shown += 1
@@ -172,6 +181,7 @@ def test_send_with_repair_qr(env, tmp_path, app):
         fs.advance()
     app.processEvents()
     assert shown < len(fs.order)  # 1 周を待たずに完了した
+    assert checked_ui
     result = receiver.last_result
     assert result is not None and result.ok, result and result.message
     assert result.path.read_bytes() == content

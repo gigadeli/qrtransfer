@@ -72,6 +72,8 @@ class Snapshot:
     elapsed_sec: float
     finished: bool
     conflict_session: int | None
+    pending: int = 0  # 修復用フレームから得た、まだ解けていない式の数（received に足すと、解けるまでの進み具合）
+    repair: bool = False  # 修復用フレームを受け取っている（欠落番号の再送は不要）
 
 
 @dataclass
@@ -326,11 +328,12 @@ class Assembler:
             window = min(RATE_WINDOW_SEC, max(now - s.started, 1e-6))
             rate = len(s.times) / window if s.times else 0.0
             csize = s.chunk_size or (s.meta or {}).get("chunk_size") or 0
-            remaining = s.total - s.bitmap.count
+            pending = s.decoder.pending if s.decoder is not None else 0
+            remaining = s.total - s.bitmap.count - pending
             eta = (remaining / rate) if rate > 0 else None
             return Snapshot(s.session_id, dict(s.meta) if s.meta else None, s.total, s.bitmap.count,
                             bytes(s.bitmap.data), rate, rate * csize, eta, now - s.started, s.finished,
-                            self._conflict_id)
+                            self._conflict_id, pending, s.decoder is not None)
 
     def missing(self) -> list[int]:
         with self._lock:
@@ -515,19 +518,26 @@ class Assembler:
             self._store(s, seq, data)
             if s.decoder is not None:
                 for q, d in s.decoder.add_known(seq, data):
-                    self._store(s, q, d)
+                    self._store(s, q, d, event=False)
         return ST_NEW
 
-    def _store(self, s: _Session, seq: int, data: bytes) -> None:
+    def _store(self, s: _Session, seq: int, data: bytes, event: bool = True) -> None:
         if seq == s.total - 1 and s.meta is not None:
             data = data[:s.meta["payload_size"] - (s.total - 1) * s.meta["chunk_size"]]  # 修復で解けた最終チャンクの埋め草を除く
         s.write_chunk(seq, data)
-        self._mark_received(s, seq)
+        self._mark_received(s, seq, event)
 
     @staticmethod
-    def _mark_received(s: _Session, seq: int) -> None:
+    def _mark_received(s: _Session, seq: int, event: bool = True) -> None:
         s.bitmap.set(seq)
         s.unflushed += 1
+        if event:
+            Assembler._count_event(s)
+
+    @staticmethod
+    def _count_event(s: _Session) -> None:
+        """受信速度の計算用。新しい情報（DATA のチャンク、または独立な修復用の式）1 つにつき 1 回。
+        修復用の式が解けてチャンクになったときは数えない（式の時点で数えている）。"""
         now = time.monotonic()
         s.times.append(now)
         while now - s.times[0] > RATE_WINDOW_SEC:
@@ -543,10 +553,14 @@ class Assembler:
         if s.decoder is None:
             s.decoder = repair.Decoder(s.total, cs)
         idx = repair.indices(s.session_id, frame.seq, s.total)
+        before = s.decoder.pending
         solved = s.decoder.add_repair(idx, frame.payload, lambda i: s.read_chunk(i) if s.bitmap.get(i) else None)
         for q, d in solved:
-            self._store(s, q, d)
-        return ST_NEW if solved else ST_DUP
+            self._store(s, q, d, event=False)
+        if s.decoder.pending + len(solved) <= before:
+            return ST_DUP  # ほかの式から導ける（新しい情報がない）
+        self._count_event(s)
+        return ST_NEW
 
     def _maybe_complete(self, callbacks: list[Callable[[], None]]) -> CompletionResult | None:
         s = self._session

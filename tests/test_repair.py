@@ -156,3 +156,51 @@ def test_old_receiver_ignores_repair_frames(tmp_path):
     for f in data_only:
         asm.feed_bytes(f)
     assert results[0].ok and hashlib.sha256(results[0].path.read_bytes()).hexdigest() == plan.meta["sha256_raw"]
+
+
+def test_single_chunk_transfer_has_no_repairs_and_fits_qr():
+    """1 チャンクだけの小さな転送: 修復用フレームは作らない（作ると QR に収まらず送信の準備が失敗していた）。"""
+    from qrtransfer import qrgen
+    assert repair.repair_count(1, 50) == 0 and repair.repair_count(2, 50) == 4
+    plan = packer.make_plan_from_packed(packer.Packed("a.bin", "file", os.urandom(100), None), 800)
+    assert plan.total == 1
+    version = qrgen.choose_version(plan.max_data_frame_size, plan.min_meta_frame_size(), "m")
+    frames = [plan.meta_frame(qrgen.capacity(version, "m")), plan.data_frame(0)]
+    frames += plan.repair_frames(repair.repair_count(plan.total, 50))
+    assert qrgen.generate_cache(frames, version, "m", workers=1) is not None
+
+
+def test_encode_can_be_cancelled_and_reports_progress():
+    import threading
+    chunks = [os.urandom(200) for _ in range(300)]
+    seen = []
+    assert len(repair.encode(chunks, 200, 1, 100, progress=lambda d, t: seen.append((d, t)))) == 100
+    assert seen[-1] == (100, 100)
+    cancel = threading.Event()
+    cancel.set()
+    assert repair.encode(chunks, 200, 1, 100, cancel=cancel) is None
+
+
+def test_progress_advances_while_collecting_repairs(tmp_path):
+    """修復用フレームを集めている間も「受信済み＋保持中の式」が 1 枚ごとに増え、速度・残り時間も出る。"""
+    plan, content = _plan(tmp_path, 300 * 200)
+    asm, results = make_assembler(tmp_path)
+    asm.feed(protocol.parse_frame(plan.meta_frame()))
+    for i in range(plan.total):
+        if i % 4:
+            asm.feed(protocol.parse_frame(plan.data_frame(i)))
+    snap = asm.snapshot()
+    assert not snap.repair and snap.pending == 0
+    progress = [snap.received + snap.pending]
+    for f in plan.repair_frames(plan.total):
+        status = asm.feed(protocol.parse_frame(f))
+        if results:
+            break
+        snap = asm.snapshot()
+        assert snap.repair
+        progress.append(snap.received + snap.pending)
+        if status == assembler.ST_NEW:
+            assert progress[-1] == progress[-2] + 1
+        assert snap.eta_sec is not None and snap.rate_chunks > 0
+    assert results and results[0].ok
+    assert len(progress) > 10 and progress == sorted(progress)

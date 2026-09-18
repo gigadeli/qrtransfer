@@ -74,6 +74,10 @@ export interface Snapshot {
   result: CompletionResult | null;
   /** 大きすぎて受け付けなかった転送 */
   rejected: Rejected | null;
+  /** 修復用フレームから得た、まだ解けていない式の数（received に足すと、解けるまでの進み具合） */
+  pending: number;
+  /** 修復用フレームを受け取っている（欠落番号の再送は不要） */
+  repair: boolean;
 }
 
 class Session {
@@ -220,11 +224,15 @@ export class Assembler {
     }
     if (!this.lengthOk(s, seq, payload.length)) return "invalid";
     this.store(s, seq, payload);
-    if (s.decoder) for (const [q, d] of s.decoder.addKnown(seq, payload)) this.store(s, q, d);
+    if (s.decoder) for (const [q, d] of s.decoder.addKnown(seq, payload)) this.store(s, q, d, false);
     return "new";
   }
 
-  private store(s: Session, seq: number, data: Uint8Array): void {
+  /**
+   * event: 受信速度に数えるか。新しい情報（DATA のチャンク、または独立な修復用の式）1 つにつき 1 回数え、
+   * 修復用の式が解けてチャンクになったときは数えない（式の時点で数えている）。
+   */
+  private store(s: Session, seq: number, data: Uint8Array, event = true): void {
     if (seq === s.total - 1 && s.meta) {
       // 修復で解けた最終チャンクは、埋め草（0）を除いた本来の長さにする
       data = data.subarray(0, s.meta.payload_size - (s.total - 1) * s.meta.chunk_size);
@@ -232,6 +240,10 @@ export class Assembler {
     s.chunks[seq] = data;
     s.bitmap[seq] = 1;
     s.received++;
+    if (event) this.countEvent(s);
+  }
+
+  private countEvent(s: Session): void {
     const now = performance.now();
     s.times.push(now);
     while (s.times.length && now - s.times[0] > RATE_WINDOW_MS) s.times.shift();
@@ -244,9 +256,12 @@ export class Assembler {
     if (frame.payload.length !== cs) return "invalid";
     s.decoder ??= new RepairDecoder(s.total, cs);
     const indices = repairIndices(s.sessionId, frame.seq, s.total);
+    const before = s.decoder.pending;
     const solved = s.decoder.addRepair(indices, frame.payload, (i) => s.chunks[i]);
-    for (const [q, d] of solved) this.store(s, q, d);
-    return solved.length ? "new" : "dup";
+    for (const [q, d] of solved) this.store(s, q, d, false);
+    if (s.decoder.pending + solved.length <= before) return "dup"; // ほかの式から導ける（新しい情報がない）
+    this.countEvent(s);
+    return "new";
   }
 
   private maybeComplete(s: Session): void {
@@ -348,20 +363,21 @@ export class Assembler {
       return {
         sessionId: null, total: 0, received: 0, meta: null, bitmap: new Uint8Array(0), ratePerSec: 0,
         bytesPerSec: 0, etaSec: null, conflictSessionId: null, finishing: false, result: this.result,
-        rejected: this.rejected,
+        rejected: this.rejected, pending: 0, repair: false,
       };
     }
     const now = performance.now();
     const recent = s.times.filter((t) => now - t <= RATE_WINDOW_MS);
     const span = recent.length >= 2 ? Math.max(1, now - recent[0]) / 1000 : 0;
     const rate = span ? recent.length / span : 0;
-    const remaining = s.total - s.received;
+    const pending = s.decoder?.pending ?? 0;
+    const remaining = s.total - s.received - pending;
     return {
       sessionId: s.sessionId, total: s.total, received: s.received, meta: s.meta, bitmap: s.bitmap,
       ratePerSec: rate, bytesPerSec: rate * (s.chunkSize ?? 0),
       etaSec: rate > 0 && remaining > 0 ? remaining / rate : null,
       conflictSessionId: s.finished ? null : this.conflictId, finishing: s.finishing, result: this.result,
-      rejected: this.rejected,
+      rejected: this.rejected, pending, repair: s.decoder !== null,
     };
   }
 }

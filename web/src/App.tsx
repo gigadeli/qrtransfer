@@ -112,7 +112,8 @@ export default function App() {
     assembler.switchToConflict();
   };
 
-  const frac = snap.total ? snap.received / snap.total : snap.meta ? 1 : 0;
+  // 修復用の式も進み具合に含める（式がそろった時点でまとめて解けるため、チャンク数だけだと止まって見える）
+  const frac = snap.total ? (snap.received + snap.pending) / snap.total : snap.meta ? 1 : 0;
   const overlay = scanner.overlay && performance.now() - scanner.overlay.time < OVERLAY_TTL_MS ? scanner.overlay : null;
 
   return (
@@ -273,11 +274,16 @@ export default function App() {
 
       {!result && missingDisplay && (
         <section className="card missing">
-          <h2>欠落番号</h2>
-          <p className="muted">送信側で R キーを押して入力すると再送モードになります</p>
-          <pre>{missingDisplay}</pre>
+          {/* 修復用 QR を受け取っている転送では、読み続けるだけで完了するので欠落番号（再送用）を出さない */}
+          {!snap.repair && (
+            <>
+              <h2>欠落番号</h2>
+              <p className="muted">送信側で R キーを押して入力すると再送モードになります</p>
+              <pre>{missingDisplay}</pre>
+            </>
+          )}
           <div className="actions">
-            <button onClick={() => void copyMissing()}>{copied ? "コピーしました" : "コピー"}</button>
+            {!snap.repair && <button onClick={() => void copyMissing()}>{copied ? "コピーしました" : "コピー"}</button>}
             <button
               className="ghost"
               onClick={() => {

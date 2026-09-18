@@ -23,6 +23,7 @@ from .chunk_map import ChunkMapWidget
 from .sender_view import human_size, human_time
 
 MISSING_DISPLAY_ITEMS = 200
+MISSING_TITLE = "欠落番号（送信側で R キーを押して入力すると再送モードになります）"
 DETECTION_TTL_SEC = 0.4
 
 
@@ -348,7 +349,8 @@ class ReceiverView(QWidget):
         grid.setRowStretch(5, 1)
         rl.addWidget(info, 1)
 
-        miss_box = QGroupBox("欠落番号（送信側で R キーを押して入力すると再送モードになります）")
+        miss_box = QGroupBox(MISSING_TITLE)
+        self.miss_box = miss_box
         ml = QVBoxLayout(miss_box)
         ml.setContentsMargins(12, 4, 12, 12)
         self.txt_missing = QPlainTextEdit()
@@ -695,6 +697,7 @@ class ReceiverView(QWidget):
             self.lbl_rate.setText("-")
             self.lbl_eta.setText("-")
             self.chunk_map.set_state(0, b"")
+            self._set_repair_mode(False)
             self._missing_key = None
             self._set_missing([])
         else:
@@ -704,11 +707,13 @@ class ReceiverView(QWidget):
             else:
                 self.lbl_name.setText("メタ情報待ち")
             self.lbl_session.setText(f"{snap.session_id:08x}　{snap.received} / {snap.total} チャンク")
-            frac = snap.received / snap.total if snap.total else (1.0 if snap.meta else 0.0)
+            # 修復用の式も進み具合に含める（式がそろった時点でまとめて解けるため、チャンク数だけだと止まって見える）
+            frac = (snap.received + snap.pending) / snap.total if snap.total else (1.0 if snap.meta else 0.0)
             self.progress.setValue(int(frac * 1000))
             self.lbl_rate.setText(f"{snap.rate_chunks:.1f} チャンク/秒　{snap.rate_bytes / 1024:.1f} KB/秒")
             self.lbl_eta.setText(human_time(snap.eta_sec) if snap.eta_sec is not None else "-")
             self.chunk_map.set_state(snap.total, snap.bitmap)
+            self._set_repair_mode(snap.repair)
             key = (snap.session_id, snap.received, snap.finished, bool(snap.meta))
             if key != self._missing_key:
                 self._missing_key = key
@@ -737,6 +742,12 @@ class ReceiverView(QWidget):
                 if total.rescued:
                     text += f"　うち補正で読めた {total.rescued} 枚"
             self.status.setText(text)
+
+    def _set_repair_mode(self, on: bool) -> None:
+        """修復用 QR を受け取っている転送では、読み続けるだけで完了するので欠落番号（再送用）を出さない。"""
+        self.miss_box.setTitle("" if on else MISSING_TITLE)
+        self.txt_missing.setVisible(not on)
+        self.btn_copy.setVisible(not on)
 
     def _set_missing(self, values: list[int] | None, note: str = "") -> None:
         if values:

@@ -61,6 +61,30 @@ describe.skipIf(!ready)("Python 版との一致", () => {
     expect(result?.ok).toBe(true);
   });
 
+  it("修復用フレームを集めている間も進み具合（受信済み＋保持中の式）が 1 枚ごとに進む", () => {
+    const c = byId("repair_file");
+    const asm = new Assembler();
+    asm.feed(parseFrame(b64(c.meta))!);
+    c.data.forEach((d, i) => i % 3 !== 1 && asm.feed(parseFrame(b64(d))!));
+    let snap = asm.snapshot();
+    expect(snap.repair).toBe(false);
+    let prev = snap.received + snap.pending;
+    let steps = 0;
+    for (const f of c.repair) {
+      const status = asm.feed(parseFrame(b64(f))!);
+      snap = asm.snapshot();
+      if (snap.received === snap.total) break;
+      expect(snap.repair).toBe(true);
+      const now = snap.received + snap.pending;
+      expect(now).toBe(status === "new" ? prev + 1 : prev);
+      expect(snap.etaSec).not.toBeNull();
+      prev = now;
+      steps++;
+    }
+    expect(steps).toBeGreaterThan(3);
+    expect(snap.received).toBe(snap.total);
+  });
+
   it("長さが違う修復用フレームは不正として扱う", () => {
     const c = byId("repair_file");
     const asm = new Assembler();

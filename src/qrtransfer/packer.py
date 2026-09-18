@@ -344,8 +344,12 @@ class TransferPlan:
     def data_frame(self, seq: int) -> bytes:
         return protocol.build_data_frame(self.session_id, seq, self.total, self.chunks[seq])
 
-    def repair_frames(self, count: int) -> list[bytes]:
-        payloads = repair.encode(self.chunks, self.chunk_size, self.session_id, count)
+    def repair_frames(self, count: int, progress: Callable[[int, int], None] | None = None,
+                      cancel=None) -> list[bytes] | None:
+        """修復用フレームを count 枚作る。cancel（threading.Event）がセットされたら None。"""
+        payloads = repair.encode(self.chunks, self.chunk_size, self.session_id, count, progress, cancel)
+        if payloads is None:
+            return None
         return [protocol.build_repair_frame(self.session_id, r, self.total, p) for r, p in enumerate(payloads)]
 
     def meta_frame(self, max_frame_size: int | None = None) -> bytes:

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from typing import Callable, Iterable
 
 import numpy as np
@@ -30,8 +31,12 @@ def degree(total: int) -> int:
 
 
 def repair_count(total: int, ratio: int) -> int:
-    """送信側で作る修復用フレームの枚数。ratio=0（従来方式）や大きすぎる転送では 0。"""
-    if ratio <= 0 or total <= 0 or total >= TOTAL_LIMIT:
+    """送信側で作る修復用フレームの枚数。ratio=0（従来方式）や大きすぎる転送では 0。
+
+    チャンクが 1 つだけのときも 0（重ねるのはそのチャンク自身なので DATA と同じ内容になる。
+    しかも最終チャンクが短いと、修復用フレームだけ QR に収まらなくなる）。
+    """
+    if ratio <= 0 or total < 2 or total >= TOTAL_LIMIT:
         return 0
     return max(4, math.ceil(total * ratio / 100))
 
@@ -65,15 +70,27 @@ def indices(session_id: int, index: int, total: int) -> list[int]:
     return sorted(chosen)
 
 
-def encode(chunks: list[bytes], chunk_size: int, session_id: int, count: int) -> list[bytes]:
-    """修復用フレームの payload（長さ chunk_size。短い最終チャンクは 0 で埋めて重ねる）を count 枚作る。"""
+def encode(chunks: list[bytes], chunk_size: int, session_id: int, count: int,
+           progress: Callable[[int, int], None] | None = None,
+           cancel: threading.Event | None = None) -> list[bytes] | None:
+    """修復用フレームの payload（長さ chunk_size。短い最終チャンクは 0 で埋めて重ねる）を count 枚作る。
+
+    cancel がセットされたら None を返す。
+    """
     total = len(chunks)
     if count <= 0 or total == 0:
         return []
     arr = np.zeros((total, chunk_size), dtype=np.uint8)
     for i, c in enumerate(chunks):
         arr[i, :len(c)] = np.frombuffer(c, dtype=np.uint8)
-    return [np.bitwise_xor.reduce(arr[indices(session_id, r, total)], axis=0).tobytes() for r in range(count)]
+    out: list[bytes] = []
+    for r in range(count):
+        if cancel is not None and cancel.is_set():
+            return None
+        out.append(np.bitwise_xor.reduce(arr[indices(session_id, r, total)], axis=0).tobytes())
+        if progress is not None and (r % 64 == 63 or r == count - 1):
+            progress(r + 1, count)
+    return out
 
 
 class Decoder:
@@ -90,6 +107,11 @@ class Decoder:
         self.rows: dict[int, tuple[int, int]] = {}  # 先頭の未知数 → (未知数のビット列, payload)
         self.max_rows = max(1, memory_limit // (total // 8 + length + 64))
         self.dropped = 0  # 保持の上限で捨てた式の数（診断用）
+
+    @property
+    def pending(self) -> int:
+        """保持している（互いに独立な）式の数。受信済みのチャンク数に足すと、あと何枚で全部解けるかがわかる。"""
+        return len(self.rows)
 
     def _pad(self, data: bytes) -> int:
         return int.from_bytes(bytes(data).ljust(self.length, b"\0"), "big")

@@ -66,11 +66,13 @@ class PrepareWorker(QThread):
             frame_seqs = [packer.CAROUSEL_META] + list(range(plan.total))
             repairs = repair.repair_count(plan.total, self.repair_ratio)
             if repairs:
-                self.progress.emit(f"修復用 QR を作っています（{repairs} 枚）…", 0, 0)
-                frames += plan.repair_frames(repairs)
-                frame_seqs += [packer.carousel_repair(r) for r in range(repairs)]
-                if self.cancel.is_set():
+                label = f"修復用 QR を作っています（{repairs} 枚）…"
+                extra = plan.repair_frames(repairs, progress=lambda d, t: self.progress.emit(label, d, t),
+                                           cancel=self.cancel)
+                if extra is None or self.cancel.is_set():
                     return
+                frames += extra
+                frame_seqs += [packer.carousel_repair(r) for r in range(repairs)]
             label = f"QR コードを生成しています（バージョン {version}、{len(frames)} 枚）…"
             cache = qrgen.generate_cache(frames, version, self.ecc,
                                          progress=lambda d, t: self.progress.emit(label, d, t),
