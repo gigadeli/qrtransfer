@@ -70,3 +70,10 @@ def read_tree(root: Path) -> tuple[dict[str, bytes], set[str]]:
             p = Path(dirpath) / f
             files[p.relative_to(root).as_posix()] = p.read_bytes()
     return files, dirs
+
+
+def pytest_runtest_logreport(report):
+    """GitHub Actions では、失敗したテストを注釈（ログインなしで見られる）にも出す。"""
+    if os.environ.get("GITHUB_ACTIONS") and report.failed:
+        text = str(report.longrepr)[-1500:].replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+        print(f"\n::error title={report.nodeid}::{text}", flush=True)
