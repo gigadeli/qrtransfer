@@ -156,6 +156,17 @@ describe.skipIf(!ready)("QR 画像の読み取り（zxing-wasm）", () => {
     expect(reader.rescued).toBeGreaterThan(0);
   });
 
+  it("並べて表示した複数の QR を 1 回で全部読める", async () => {
+    const info = readJson<{ width: number; height: number; frames: string[] }>("multi.json");
+    const img = new ImageData(new Uint8ClampedArray(readFileSync(join(FIXTURES, "multi.bin"))), info.width, info.height);
+    const dets = (await new RobustReader().read(img)).filter((d) => d.bytes);
+    const got = dets.map((d) => Buffer.from(d.bytes!).toString("base64")).sort();
+    expect(got).toEqual([...info.frames].sort());
+    // 左から順に並んでいる（位置も正しい）
+    const xs = dets.map((d) => Math.min(...d.points.map((p) => p[0]))).sort((a, b) => a - b);
+    for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeGreaterThan(info.width / 8);
+  });
+
   it("QR の周辺だけを渡しても読め、位置は映像全体の座標で返る", async () => {
     const info = readJson<{ width: number; height: number; frame: string }>("blur.json");
     const img = new ImageData(new Uint8ClampedArray(readFileSync(join(FIXTURES, "blur.bin"))), info.width, info.height);

@@ -486,3 +486,62 @@ def test_ecc_follows_send_method(env, tmp_path, app):
     assert dlg.combo_ecc.currentData() == "m" and not dlg.spin_repair.isEnabled()
     dlg.combo_method.setCurrentIndex(0)
     assert dlg.combo_ecc.currentData() == "l" and dlg.spin_repair.isEnabled()
+
+
+
+def test_grid_layout():
+    from qrtransfer.ui.fullscreen_qr import grid_layout
+    # 横長の画面: 2 個は横に並べ、1 個のときとほぼ同じ大きさ
+    c1, r1, s1 = grid_layout(1, 1728, 810, 49)
+    c2, r2, s2 = grid_layout(2, 1728, 810, 49)
+    assert (c1, r1) == (1, 1) and (c2, r2) == (2, 1) and s2 >= s1 * 0.9
+    assert grid_layout(4, 1728, 810, 49)[:2] == (4, 1)  # 16:9 では 1 列に並べるほうが大きい
+    assert grid_layout(4, 1200, 900, 49)[:2] == (2, 2)  # 4:3 では 2×2
+    assert grid_layout(3, 1728, 810, 49)[:2] == (3, 1)
+    # 縦長の画面では縦に並べる
+    assert grid_layout(2, 800, 1600, 49)[:2] == (1, 2)
+    for n in range(1, 5):
+        cols, rows, side = grid_layout(n, 1728, 810, 49)
+        assert cols * rows >= n and cols * side <= 1728 and rows * side <= 810
+
+
+@pytest.mark.parametrize("codes", [2, 4])
+def test_send_multiple_codes_at_once(env, tmp_path, app, codes):
+    """QR を複数並べて表示しても、1 回の撮影で全部読め、1 周の表示回数が 1/codes になる。"""
+    from qrtransfer.ui.fullscreen_qr import FullscreenQR
+    from qrtransfer.ui.main_window import MainWindow
+    src = tmp_path / "src" / "multi.bin"
+    src.parent.mkdir(parents=True)
+    content = os.urandom(6000)
+    src.write_bytes(content)
+    win = MainWindow(env)
+    win.show_sender()
+    plan, cache, seqs = prepare(win.sender, [src], repair_ratio=50)
+    receiver = win.show_receiver()
+    fs = FullscreenQR(plan, cache, seqs, fps=15, codes=codes, fullscreen=False)
+    fs.resize(1920, 1080)
+    fs.show()
+    app.processEvents()
+    rects = fs.qr_rects()
+    assert len(rects) == codes == len(set(fs.current_seqs()))
+    for a in range(codes):  # 重ならない
+        for b in range(a + 1, codes):
+            assert not rects[a].intersects(rects[b])
+    shows = 0
+    decoded = 0
+    while receiver.last_result is None and shows < len(fs.order):
+        dets, _ = process_image(camera_like(qimage_to_bgr(fs.grab().toImage())), receiver.assembler)
+        assert len(dets) == fs.shown() and all(d.ok for d in dets), f"show {shows}: {len(dets)} codes"
+        decoded += len(dets)
+        fs.advance()
+        shows += 1
+        app.processEvents()
+    receiver.refresh()
+    assert receiver.last_result is not None and receiver.last_result.ok
+    assert receiver.last_result.path.read_bytes() == content
+    assert shows <= -(-len(fs.order) // codes)
+    # C キーで並べる数を切り替えられ、終了時の状態に残る
+    QTest.keyClick(fs, Qt.Key.Key_C)
+    assert fs.codes == codes % 4 + 1 and fs.state()["codes"] == fs.codes
+    fs.close()
+    win.close()

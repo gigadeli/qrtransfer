@@ -4,6 +4,7 @@
   frames.json       … いろいろな送信内容（圧縮なし / zlib / lzma / フォルダ / 空ファイル / 危険なパス）のフレーム列と期待値
   qr_XX.png         … 1 つの送信内容を QR 画像にしたもの（zxing-wasm で読めるかの確認）
   blur.json/.bin    … 撮影を模した少しボケた画像（RGBA）。シャープ化で読めるかの確認
+  multi.json/.bin   … QR を 4 つ並べて表示した画面を撮影したような画像（RGBA）。1 回で全部読めるかの確認
 
 Python 版の変更で Web 版が読めなくなっていないかを、CI で毎回確かめるために使う。
     python web/scripts/make_fixtures.py
@@ -164,6 +165,17 @@ def main() -> None:
     (OUT / "blur.bin").write_bytes(rgba.tobytes())
     (OUT / "blur.json").write_text(json.dumps({
         "width": int(shot.shape[1]), "height": int(shot.shape[0]), "frame": b64(frames[1]),
+    }), encoding="utf-8")
+    # QR を 4 つ横に並べた画面を撮影したような画像（送信側の「同時に表示する QR」）
+    cells = [cache.gray(i, scale=3) for i in range(4)]
+    row = np.hstack(cells)
+    canvas = np.full((row.shape[0] + 60, row.shape[1] + 60), 255, np.uint8)
+    canvas[30:30 + row.shape[0], 30:30 + row.shape[1]] = row
+    shot = np.clip(cv2.GaussianBlur(canvas, (0, 0), 0.8).astype(np.float32) * 0.7 + 40, 0, 255).astype(np.uint8)
+    rgba = np.dstack([shot, shot, shot, np.full_like(shot, 255)])
+    (OUT / "multi.bin").write_bytes(rgba.tobytes())
+    (OUT / "multi.json").write_text(json.dumps({
+        "width": int(shot.shape[1]), "height": int(shot.shape[0]), "frames": [b64(f) for f in frames[:4]],
     }), encoding="utf-8")
     print(f"wrote {len(cases)} cases, {len(frames)} QR images to {OUT}")
 

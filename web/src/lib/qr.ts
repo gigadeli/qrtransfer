@@ -26,6 +26,9 @@ export function configureWasm(wasmUrl: string): void {
   });
 }
 
+/** 1 枚の画像から読む QR の最大数（送信側は最大 4 つ並べる。周りに別の QR が写っていても取りこぼさないよう余裕を持つ） */
+export const MAX_SYMBOLS = 8;
+
 const OPTIONS = {
   formats: ["QRCode" as const],
   tryHarder: true,
@@ -33,7 +36,7 @@ const OPTIONS = {
   tryInvert: false,
   tryDownscale: true,
   returnErrors: true,
-  maxNumberOfSymbols: 1,
+  maxNumberOfSymbols: MAX_SYMBOLS,
 };
 
 function toDetections(results: ReadResult[]): Detection[] {
@@ -92,7 +95,7 @@ export function crop(img: ImageData, x0: number, y0: number, x1: number, y1: num
   return out;
 }
 
-/** 位置の周辺（外接矩形の 20% 外側まで）。 */
+/** 位置の周辺（外接矩形の 20% 外側まで）。points は複数の QR の頂点を合わせたものでもよい（全体を囲む）。 */
 export function roiOf(points: [number, number][], w: number, h: number): [number, number, number, number] {
   const xs = points.map((p) => p[0]);
   const ys = points.map((p) => p[1]);
@@ -109,7 +112,7 @@ const RETRY_WINDOW = 20; // 読み直しが効いているかを判断する回�
 const RETRY_PROBE = 8; // 効いていないときも、この回数に 1 回は試す（ピントが外れてきたときに備えて）
 
 /**
- * 素の画像 → 読めなければ、QR が見つかった位置の周辺をシャープ化して再試行。
+ * 素の画像 → 読めなかった QR があれば、その位置の周辺をシャープ化して再試行（複数並んでいるときは 1 つずつ）。
  *
  * 読み直しは重い（素の読み取りの 2 倍以上）。QR の切り替わり途中の画像（上下で別の QR が混ざったもの）は
  * 読み直しても読めないので、最近の読み直しが 1 回も成功していなければ、ときどきしか試さない。
@@ -126,19 +129,28 @@ export class RobustReader {
    */
   async read(img: ImageData, x0 = 0, y0 = 0, focused = false): Promise<Detection[]> {
     const plain = await decodeImage(img);
-    if (!plain.some((d) => d.bytes) && (plain.length || focused) && this.enhance && this.shouldRetry()) {
-      const [rx0, ry0, rx1, ry1] = plain.length ? roiOf(plain[0].points, img.width, img.height) : [0, 0, img.width, img.height];
-      if (rx1 - rx0 > 16 && ry1 - ry0 > 16) {
-        const retry = await decodeImage(sharpen(crop(img, rx0, ry0, rx1, ry1)));
-        const ok = retry.some((d) => d.bytes);
-        this.record(ok);
-        if (ok) {
-          this.rescued++;
-          return offset(retry, x0 + rx0, y0 + ry0);
-        }
+    const failed = plain.filter((d) => !d.bytes);
+    // 位置が見つかったのに読めなかった QR（無ければ、周辺を切り出した画像全体）を読み直す
+    const targets: ([number, number, number, number] | null)[] = failed.length
+      ? failed.map((d) => roiOf(d.points, img.width, img.height))
+      : !plain.length && focused ? [[0, 0, img.width, img.height]] : [];
+    if (!targets.length || !this.enhance || !this.shouldRetry()) return offset(plain, x0, y0);
+    const out = plain.filter((d) => d.bytes);
+    let ok = false;
+    for (let i = 0; i < targets.length; i++) {
+      const [rx0, ry0, rx1, ry1] = targets[i]!;
+      const retry = rx1 - rx0 > 16 && ry1 - ry0 > 16 ? await decodeImage(sharpen(crop(img, rx0, ry0, rx1, ry1))) : [];
+      const got = offset(retry, rx0, ry0).filter((d) => d.bytes && !out.some((o) => sameBytes(o.bytes!, d.bytes!)));
+      if (got.length) {
+        ok = true;
+        this.rescued++;
+        out.push(...got);
+      } else if (failed[i]) {
+        out.push(failed[i]);
       }
     }
-    return offset(plain, x0, y0);
+    this.record(ok);
+    return offset(out, x0, y0);
   }
 
   private shouldRetry(): boolean {
@@ -152,6 +164,10 @@ export class RobustReader {
     this.recent.push(ok);
     if (this.recent.length > RETRY_WINDOW) this.recent.shift();
   }
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 function offset(dets: Detection[], dx: number, dy: number): Detection[] {

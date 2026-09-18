@@ -18,7 +18,7 @@ from ..settings import ECC_HINT, FPS_HINT, FPS_MAX, FPS_MIN, REPAIR_RATIO_MIN, R
 from .fullscreen_qr import FullscreenQR
 from .receiver_view import ReceiverView
 from . import theme
-from .sender_view import SenderView, human_size
+from .sender_view import SenderView, codes_combo, human_size
 
 
 def resource_path(rel: str) -> str:
@@ -56,6 +56,7 @@ class SettingsDialog(QDialog):
         self.spin_fps.setRange(FPS_MIN, FPS_MAX)
         self.spin_fps.setValue(settings.fps)
         self.spin_fps.setToolTip(FPS_HINT)
+        self.combo_codes = codes_combo(settings.qr_codes)
         self.spin_chunk = QSpinBox()
         self.spin_chunk.setRange(packer.CHUNK_SIZE_MIN, packer.CHUNK_SIZE_MAX)
         self.spin_chunk.setSingleStep(50)
@@ -102,6 +103,7 @@ class SettingsDialog(QDialog):
         form.addRow("", self.chk_zip)
         form.addRow(_section("送信"))
         form.addRow("表示速度 (fps)", self.spin_fps)
+        form.addRow("同時に表示する QR", self.combo_codes)
         form.addRow("チャンクサイズ (バイト)", self.spin_chunk)
         form.addRow("誤り訂正レベル (ECC)", self.combo_ecc)
         form.addRow("送信方式", self.combo_method)
@@ -136,6 +138,7 @@ class SettingsDialog(QDialog):
         s.resolution = self.combo_res.currentData()
         s.autofocus = self.chk_af.isChecked()
         s.fps = self.spin_fps.value()
+        s.qr_codes = self.combo_codes.currentData()
         s.chunk_size = self.spin_chunk.value()
         s.ecc = self.combo_ecc.currentData()
         s.qr_fullscreen = bool(self.combo_display.currentData())
@@ -327,7 +330,7 @@ class MainWindow(QMainWindow):
         fs = FullscreenQR(plan, cache, frame_seqs, fps, fullscreen=use_fullscreen,
                           always_on_top=self.settings.qr_always_on_top,
                           geometry=self.settings.qr_window_geometry or None,
-                          wait_for_start=self.settings.qr_wait_for_start)
+                          wait_for_start=self.settings.qr_wait_for_start, codes=self.settings.qr_codes)
         if self.windowIcon() is not None:
             fs.setWindowIcon(self.windowIcon())
         fs.closed.connect(self._fullscreen_closed)
@@ -341,11 +344,14 @@ class MainWindow(QMainWindow):
     def _fullscreen_closed(self, state: dict) -> None:
         self.fullscreen = None
         fps = int(state.get("fps", self.settings.fps))
+        codes = int(state.get("codes", self.settings.qr_codes))
         if self.sender is not None:
             self.sender.spin_fps.setValue(fps)
+            self.sender.combo_codes.setCurrentIndex(max(0, self.sender.combo_codes.findData(codes)))
             self.sender.combo_display.setCurrentIndex(0 if state.get("fullscreen", True) else 1)
             self.sender.chk_on_top.setChecked(bool(state.get("always_on_top", False)))
         self.settings.fps = fps
+        self.settings.qr_codes = codes
         self.settings.qr_fullscreen = bool(state.get("fullscreen", True))
         self.settings.qr_always_on_top = bool(state.get("always_on_top", False))
         if state.get("geometry"):

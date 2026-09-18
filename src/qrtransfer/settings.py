@@ -14,6 +14,10 @@ RESOLUTIONS = [(1280, 720), (1920, 1080)]
 # 上限の目安は受信側カメラの半分（PC の受信は 30fps のカメラで 15、iPhone の Web 受信は 60fps で 30）
 FPS_MIN, FPS_MAX, FPS_DEFAULT = 1, 30, 6
 REPAIR_RATIO_MIN = 10
+CODES_MAX = 4  # 同時に表示する QR の数の上限
+CODES_HINT = ("QR を複数並べて一度に表示し、1 回の表示で送る量を増やします。横長の画面なら 2 個でも 1 個のときと"
+              "ほぼ同じ大きさで表示できます。3 個以上は QR が小さくなるので、受信側のカメラの解像度が必要です。"
+              "Web 受信ページは v1.3.0 以降の版が必要です（それより前のページは 1 回に 1 つしか読みません）。")
 FPS_HINT = "受信側カメラのフレームレートの半分程度までが目安です（PC の受信は 15、iPhone の Web 受信は 30 まで）。"
 ECC_HINT = ("修復用 QR を混ぜるときは L がおすすめです。読めなかった QR は修復用 QR で補えるので、"
             "QR 自体の誤り訂正を減らして QR を小さく（1 マスを大きく）するほうが読み取りやすくなります。")
@@ -151,6 +155,15 @@ class Settings:
     @fps.setter
     def fps(self, v: int) -> None:
         self._q.setValue("sender/fps", int(v))
+
+    @property
+    def qr_codes(self) -> int:
+        """同時に表示する QR の数（1〜CODES_MAX）。"""
+        return self._int("sender/codes", 1, 1, CODES_MAX)
+
+    @qr_codes.setter
+    def qr_codes(self, v: int) -> None:
+        self._q.setValue("sender/codes", int(v))
 
     @property
     def chunk_size(self) -> int:

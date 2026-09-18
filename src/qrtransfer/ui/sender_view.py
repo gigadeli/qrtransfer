@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDia
                                QSpinBox, QVBoxLayout, QWidget)
 
 from .. import packer, protocol, qrgen, repair
-from ..settings import ECC_HINT, FPS_HINT, FPS_MAX, FPS_MIN, REPAIR_RATIO_MIN, Settings, recommended_ecc
+from ..settings import (CODES_HINT, CODES_MAX, ECC_HINT, FPS_HINT, FPS_MAX, FPS_MIN, REPAIR_RATIO_MIN, Settings,
+                        recommended_ecc)
 
 WARN_SIZE = 10 * 1024 * 1024
 
@@ -33,6 +34,17 @@ def human_time(sec: float) -> str:
     if sec < 3600:
         return f"{sec // 60} 分 {sec % 60} 秒"
     return f"{sec // 3600} 時間 {sec % 3600 // 60} 分"
+
+
+def codes_combo(current: int) -> QComboBox:
+    """「同時に表示する QR」の選択欄（送信画面と設定画面で共通）。"""
+    combo = QComboBox()
+    for n, desc in ((1, "1 個"), (2, "2 個（横に並べる。横長の画面なら大きさはほぼ同じ）"), (3, "3 個"), (4, "4 個")):
+        if n <= CODES_MAX:
+            combo.addItem(desc, n)
+    combo.setCurrentIndex(max(0, combo.findData(current)))
+    combo.setToolTip(CODES_HINT)
+    return combo
 
 
 class PrepareWorker(QThread):
@@ -161,6 +173,7 @@ class SenderView(QWidget):
         self.spin_fps.setValue(settings.fps)
         self.spin_fps.setSuffix(" fps")
         self.spin_fps.setToolTip(FPS_HINT)
+        self.combo_codes = codes_combo(settings.qr_codes)
         self.combo_display = QComboBox()
         self.combo_display.addItem("全画面（読み取りやすい）", True)
         self.combo_display.addItem("ウィンドウ（他の操作をしながら送れる）", False)
@@ -183,6 +196,7 @@ class SenderView(QWidget):
         form.addRow("チャンクサイズ", self.spin_chunk)
         form.addRow("誤り訂正レベル (ECC)", self.combo_ecc)
         form.addRow("表示速度", self.spin_fps)
+        form.addRow("同時に表示する QR", self.combo_codes)
         form.addRow("送信方式", method_row)
         self.chk_wait = QCheckBox("受信側の準備ができるまで待機する（最初の QR を表示したまま、Space / Enter で送信開始）")
         self.chk_wait.setChecked(settings.qr_wait_for_start)
@@ -204,6 +218,7 @@ class SenderView(QWidget):
         self.spin_chunk.valueChanged.connect(self.update_estimate)
         self.combo_ecc.currentIndexChanged.connect(self.update_estimate)
         self.spin_fps.valueChanged.connect(self.update_estimate)
+        self.combo_codes.currentIndexChanged.connect(self.update_estimate)
         self.combo_method.currentIndexChanged.connect(self._method_changed)
         self.spin_repair.valueChanged.connect(self.update_estimate)
         self.update_estimate()
@@ -253,7 +268,7 @@ class SenderView(QWidget):
     def estimate_text(self) -> str:
         chunk = self.spin_chunk.value()
         ecc = self.combo_ecc.currentData()
-        fps = self.spin_fps.value()
+        fps = self.spin_fps.value() * self.combo_codes.currentData()  # 1 秒あたりに表示する QR の枚数
         size = self.input_size
         total = packer.total_chunks(size, chunk)
         repairs = repair.repair_count(total, self.repair_ratio())
@@ -293,6 +308,7 @@ class SenderView(QWidget):
         self.settings.chunk_size = self.spin_chunk.value()
         self.settings.ecc = self.combo_ecc.currentData()
         self.settings.fps = self.spin_fps.value()
+        self.settings.qr_codes = self.combo_codes.currentData()
         self.settings.qr_fullscreen = bool(self.combo_display.currentData())
         self.settings.qr_always_on_top = self.chk_on_top.isChecked()
         self.settings.qr_wait_for_start = self.chk_wait.isChecked()

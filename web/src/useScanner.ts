@@ -7,10 +7,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DecodeRequest, DecodeResponse } from "./decodeWorker";
-import { roiOf } from "./lib/qr";
+import { type Roi, type Tracked, nextRoi } from "./lib/roi";
 
 const MAX_SIDE = 1920; // これより大きい映像は縮小して読む（読み取り時間を抑える）
-const ROI_MISSES = 10; // 周辺だけを読んで、読めない回数がこれだけ続いたら全体から探し直す
 const IOS_FPS = 60; // iOS では「希望」で頼むと 30fps にされるため、この値を「必須」として頼む
 
 /** iPhone / iPad（iPadOS は Mac と名乗るので、タッチ対応かどうかでも見分ける） */
@@ -30,8 +29,6 @@ async function openCamera(video: MediaTrackConstraints): Promise<MediaStream> {
   }
   return navigator.mediaDevices.getUserMedia({ video, audio: false });
 }
-
-type Roi = [number, number, number, number];
 
 export interface Overlay {
   width: number;
@@ -69,7 +66,7 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
   const wakeRef = useRef<WakeLockSentinelLike | null>(null);
   const timerRef = useRef<number | null>(null);
   const errorsRef = useRef(0);
-  const roiRef = useRef<{ roi: Roi; w: number; h: number; misses: number } | null>(null);
+  const roiRef = useRef<Tracked | null>(null);
   const startRef = useRef<(id?: string | null) => Promise<void>>(async () => undefined);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,15 +124,9 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
     worker.onmessage = (ev: MessageEvent<DecodeResponse>) => {
       busyRef.current = false;
       const res = ev.data;
-      // 読む範囲は、実際に読めた QR の位置から決める（QR でない模様を誤って見つけた位置に固定されないように）
-      const found = res.detections.find((d) => d.bytes);
-      const tracked = roiRef.current;
-      if (found) {
-        roiRef.current = { roi: roiOf(found.points, res.width, res.height), w: res.width, h: res.height, misses: 0 };
-      } else if (tracked && ++tracked.misses >= ROI_MISSES) {
-        roiRef.current = null;
-      }
       const boxes = res.detections.map((d) => ({ points: d.points, ok: d.bytes ? onFrameRef.current(d.bytes) : false }));
+      // 読む範囲は、正しく読めた QR の位置から決める（QR でない模様や、無関係の QR の位置に固定されないように）
+      roiRef.current = nextRoi(roiRef.current, boxes.filter((b) => b.ok).map((b) => b.points), res.width, res.height);
       if (boxes.length) setOverlay({ width: res.width, height: res.height, boxes, time: performance.now() });
       const c = countRef.current;
       c.n++;
