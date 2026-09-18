@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDia
                                QSpinBox, QVBoxLayout, QWidget)
 
 from .. import packer, protocol, qrgen, repair
-from ..settings import FPS_MAX, FPS_MIN, REPAIR_RATIO_MIN, Settings
+from ..settings import ECC_HINT, FPS_HINT, FPS_MAX, FPS_MIN, REPAIR_RATIO_MIN, Settings, recommended_ecc
 
 WARN_SIZE = 10 * 1024 * 1024
 
@@ -155,10 +155,12 @@ class SenderView(QWidget):
                         ("h", "H（約 30% 復元）")):
             self.combo_ecc.addItem(desc, e)
         self.combo_ecc.setCurrentIndex(qrgen.ECC_LEVELS.index(settings.ecc))
+        self.combo_ecc.setToolTip(ECC_HINT)
         self.spin_fps = QSpinBox()
         self.spin_fps.setRange(FPS_MIN, FPS_MAX)
         self.spin_fps.setValue(settings.fps)
         self.spin_fps.setSuffix(" fps")
+        self.spin_fps.setToolTip(FPS_HINT)
         self.combo_display = QComboBox()
         self.combo_display.addItem("全画面（読み取りやすい）", True)
         self.combo_display.addItem("ウィンドウ（他の操作をしながら送れる）", False)
@@ -202,7 +204,7 @@ class SenderView(QWidget):
         self.spin_chunk.valueChanged.connect(self.update_estimate)
         self.combo_ecc.currentIndexChanged.connect(self.update_estimate)
         self.spin_fps.valueChanged.connect(self.update_estimate)
-        self.combo_method.currentIndexChanged.connect(self.update_estimate)
+        self.combo_method.currentIndexChanged.connect(self._method_changed)
         self.spin_repair.valueChanged.connect(self.update_estimate)
         self.update_estimate()
 
@@ -275,6 +277,12 @@ class SenderView(QWidget):
 
     def repair_ratio(self) -> int:
         return self.spin_repair.value() if self.combo_method.currentData() else 0
+
+    def _method_changed(self) -> None:
+        # 送信方式に合わせて、おすすめの誤り訂正レベルに切り替える（あとから変更してもよい）
+        e = recommended_ecc(bool(self.combo_method.currentData()))
+        self.combo_ecc.setCurrentIndex(qrgen.ECC_LEVELS.index(e))
+        self.update_estimate()
 
     def update_estimate(self) -> None:
         self.spin_repair.setEnabled(bool(self.combo_method.currentData()))

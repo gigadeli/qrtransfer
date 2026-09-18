@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { clearMedia } from "./lib/media";
 import "./styles.css";
 
 createRoot(document.getElementById("root")!).render(
@@ -11,6 +12,7 @@ createRoot(document.getElementById("root")!).render(
 
 // 一度開けば、以後はオフラインでも開けるようにする（sw.js はビルド時に作る）
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  void clearMedia(); // 前回の受信データを残さない
   window.addEventListener("load", () => {
     navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch((e) => console.warn(e));
   });

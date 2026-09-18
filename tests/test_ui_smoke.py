@@ -451,3 +451,38 @@ def test_wait_for_start(env, tmp_path, app):
     assert not fs.waiting and fs.timer.isActive()
     fs.close()
     win.close()
+
+
+def test_ecc_follows_send_method(env, tmp_path, app):
+    """修復用 QR を混ぜるときの既定は ECC L。以前の既定値（M）は L に移し、送信方式を切り替えるとおすすめに合わせる。"""
+    from qrtransfer.settings import FPS_MAX, Settings
+    from qrtransfer.ui.main_window import SettingsDialog
+    from qrtransfer.ui.sender_view import SenderView
+    assert FPS_MAX == 30
+    assert Settings(tmp_path / "fresh.ini").ecc == "l"
+    legacy = Settings(tmp_path / "legacy.ini")
+    legacy.use_repair = False
+    assert legacy.ecc == "m"
+    # 以前の版で保存された設定: M（旧既定）は L へ、ユーザーが選んだ Q はそのまま、移行は一度だけ
+    from PySide6.QtCore import QSettings
+    for name, old, new in (("old_m.ini", "m", "l"), ("old_q.ini", "q", "q")):
+        q = QSettings(str(tmp_path / name), QSettings.Format.IniFormat)
+        q.setValue("sender/ecc", old)
+        q.sync()
+        s = Settings(tmp_path / name)
+        assert s.ecc == new
+        s.ecc = "m"
+        s.sync()
+        assert Settings(tmp_path / name).ecc == "m"
+
+    view = SenderView(env)
+    view.combo_method.setCurrentIndex(1)  # 従来
+    assert view.combo_ecc.currentData() == "m"
+    view.combo_method.setCurrentIndex(0)  # 修復用 QR
+    assert view.combo_ecc.currentData() == "l"
+    assert view.spin_fps.maximum() == 30
+    dlg = SettingsDialog(env)
+    dlg.combo_method.setCurrentIndex(1)
+    assert dlg.combo_ecc.currentData() == "m" and not dlg.spin_repair.isEnabled()
+    dlg.combo_method.setCurrentIndex(0)
+    assert dlg.combo_ecc.currentData() == "l" and dlg.spin_repair.isEnabled()

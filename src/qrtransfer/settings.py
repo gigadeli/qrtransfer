@@ -11,8 +11,17 @@ from PySide6.QtCore import QSettings, QStandardPaths
 from . import packer, qrgen, repair
 
 RESOLUTIONS = [(1280, 720), (1920, 1080)]
-FPS_MIN, FPS_MAX, FPS_DEFAULT = 1, 15, 6
+# 上限の目安は受信側カメラの半分（PC の受信は 30fps のカメラで 15、iPhone の Web 受信は 60fps で 30）
+FPS_MIN, FPS_MAX, FPS_DEFAULT = 1, 30, 6
 REPAIR_RATIO_MIN = 10
+FPS_HINT = "受信側カメラのフレームレートの半分程度までが目安です（PC の受信は 15、iPhone の Web 受信は 30 まで）。"
+ECC_HINT = ("修復用 QR を混ぜるときは L がおすすめです。読めなかった QR は修復用 QR で補えるので、"
+            "QR 自体の誤り訂正を減らして QR を小さく（1 マスを大きく）するほうが読み取りやすくなります。")
+
+
+def recommended_ecc(use_repair: bool) -> str:
+    """送信方式ごとのおすすめの誤り訂正レベル。修復用 QR で欠けを補えるときは L、従来方式では M。"""
+    return "l" if use_repair else qrgen.ECC_DEFAULT
 
 
 def settings_path() -> Path:
@@ -28,6 +37,14 @@ def default_download_dir() -> str:
 class Settings:
     def __init__(self, path: str | os.PathLike | None = None):
         self._q = QSettings(str(path or settings_path()), QSettings.Format.IniFormat)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        # v1.2: 修復用 QR を使うときの誤り訂正の既定を M → L に変更。以前の既定値（M）のままなら L にする
+        if self._q.value("sender/ecc_defaults") is None:
+            if self.use_repair and str(self._q.value("sender/ecc", "")).lower() == "m":
+                self._q.setValue("sender/ecc", "l")
+            self._q.setValue("sender/ecc_defaults", 2)
 
     def _int(self, key: str, default: int, lo: int, hi: int) -> int:
         try:
@@ -202,8 +219,9 @@ class Settings:
 
     @property
     def ecc(self) -> str:
-        v = str(self._q.value("sender/ecc", qrgen.ECC_DEFAULT)).lower()
-        return v if v in qrgen.ECC_LEVELS else qrgen.ECC_DEFAULT
+        default = recommended_ecc(self.use_repair)
+        v = str(self._q.value("sender/ecc", default)).lower()
+        return v if v in qrgen.ECC_LEVELS else default
 
     @ecc.setter
     def ecc(self, v: str) -> None:

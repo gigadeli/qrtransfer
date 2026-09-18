@@ -11,6 +11,25 @@ import { roiOf } from "./lib/qr";
 
 const MAX_SIDE = 1920; // これより大きい映像は縮小して読む（読み取り時間を抑える）
 const ROI_MISSES = 10; // 周辺だけを読んで、読めない回数がこれだけ続いたら全体から探し直す
+const IOS_FPS = 60; // iOS では「希望」で頼むと 30fps にされるため、この値を「必須」として頼む
+
+/** iPhone / iPad（iPadOS は Mac と名乗るので、タッチ対応かどうかでも見分ける） */
+function isIOS(): boolean {
+  return /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+}
+
+/** 映像を取得する。iOS では先に 60fps を必須として頼み、断られたら通常の頼み方に戻す。 */
+async function openCamera(video: MediaTrackConstraints): Promise<MediaStream> {
+  if (isIOS()) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: { ...video, frameRate: { exact: IOS_FPS } }, audio: false });
+    } catch (e) {
+      // 権限の拒否などはそのまま伝える。条件を満たせないときだけ通常の頼み方で開き直す
+      if (!(e instanceof DOMException && (e.name === "OverconstrainedError" || e.name === "NotReadableError"))) throw e;
+    }
+  }
+  return navigator.mediaDevices.getUserMedia({ video, audio: false });
+}
 
 type Roi = [number, number, number, number];
 
@@ -26,6 +45,8 @@ export interface ScannerStats {
   rescued: number;
   videoWidth: number;
   videoHeight: number;
+  /** カメラが実際に出しているフレームレート（端末が教えない場合は 0） */
+  videoFps: number;
 }
 
 export interface CameraDevice {
@@ -55,7 +76,7 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
   const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [devices, setDevices] = useState<CameraDevice[]>([]);
   const [deviceId, setDeviceId] = useState<string | null>(null);
-  const [stats, setStats] = useState<ScannerStats>({ decodesPerSec: 0, rescued: 0, videoWidth: 0, videoHeight: 0 });
+  const [stats, setStats] = useState<ScannerStats>({ decodesPerSec: 0, rescued: 0, videoWidth: 0, videoHeight: 0, videoFps: 0 });
   onFrameRef.current = onFrame;
 
   const setEnhance = useCallback((on: boolean) => {
@@ -124,6 +145,7 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
         setStats({
           decodesPerSec: (c.n * 1000) / (now - c.t0), rescued: res.rescued,
           videoWidth: video?.videoWidth ?? 0, videoHeight: video?.videoHeight ?? 0,
+          videoFps: streamRef.current?.getVideoTracks()[0]?.getSettings().frameRate ?? 0,
         });
         c.n = 0;
         c.t0 = now;
@@ -174,7 +196,7 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
         };
         const stream = isDemo
           ? await (await import("./demoStream")).demoStream(Number(new URLSearchParams(location.search).get("demo")) || 6)
-          : await navigator.mediaDevices.getUserMedia({ video, audio: false });
+          : await openCamera(video);
         streamRef.current = stream;
         const track = stream.getVideoTracks()[0];
         track.addEventListener("ended", () => {

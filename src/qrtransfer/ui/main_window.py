@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
 
 from .. import APP_NAME, __version__, packer, qrgen, repair
 from ..assembler import Assembler, IncompleteSession
-from ..settings import FPS_MAX, FPS_MIN, REPAIR_RATIO_MIN, RESOLUTIONS, Settings
+from ..settings import ECC_HINT, FPS_HINT, FPS_MAX, FPS_MIN, REPAIR_RATIO_MIN, RESOLUTIONS, Settings, recommended_ecc
 from .fullscreen_qr import FullscreenQR
 from .receiver_view import ReceiverView
 from . import theme
@@ -55,6 +55,7 @@ class SettingsDialog(QDialog):
         self.spin_fps = QSpinBox()
         self.spin_fps.setRange(FPS_MIN, FPS_MAX)
         self.spin_fps.setValue(settings.fps)
+        self.spin_fps.setToolTip(FPS_HINT)
         self.spin_chunk = QSpinBox()
         self.spin_chunk.setRange(packer.CHUNK_SIZE_MIN, packer.CHUNK_SIZE_MAX)
         self.spin_chunk.setSingleStep(50)
@@ -63,6 +64,7 @@ class SettingsDialog(QDialog):
         for e in qrgen.ECC_LEVELS:
             self.combo_ecc.addItem(e.upper(), e)
         self.combo_ecc.setCurrentIndex(qrgen.ECC_LEVELS.index(settings.ecc))
+        self.combo_ecc.setToolTip(ECC_HINT)
         self.combo_display = QComboBox()
         self.combo_display.addItem("全画面", True)
         self.combo_display.addItem("ウィンドウ", False)
@@ -81,8 +83,7 @@ class SettingsDialog(QDialog):
         self.spin_repair.setSuffix(" %")
         self.spin_repair.setValue(settings.repair_ratio)
         self.spin_repair.setEnabled(settings.use_repair)
-        self.combo_method.currentIndexChanged.connect(
-            lambda: self.spin_repair.setEnabled(bool(self.combo_method.currentData())))
+        self.combo_method.currentIndexChanged.connect(self._method_changed)
 
         out_row = QHBoxLayout()
         self.edit_out = QLineEdit(settings.output_dir)
@@ -118,6 +119,11 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form.addRow(buttons)
+
+    def _method_changed(self) -> None:
+        use = bool(self.combo_method.currentData())
+        self.spin_repair.setEnabled(use)
+        self.combo_ecc.setCurrentIndex(qrgen.ECC_LEVELS.index(recommended_ecc(use)))
 
     def _browse(self) -> None:
         d = QFileDialog.getExistingDirectory(self, "保存先フォルダ", self.edit_out.text())

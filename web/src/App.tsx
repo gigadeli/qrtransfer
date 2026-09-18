@@ -167,7 +167,8 @@ export default function App() {
         )}
         {scanner.running && scanner.stats.videoWidth > 0 && (
           <p className="stats muted">
-            {scanner.stats.videoWidth}×{scanner.stats.videoHeight}　読み取り {scanner.stats.decodesPerSec.toFixed(0)} 回/秒
+            {scanner.stats.videoWidth}×{scanner.stats.videoHeight}
+            {scanner.stats.videoFps > 0 && ` ${Math.round(scanner.stats.videoFps)}fps`}　読み取り {scanner.stats.decodesPerSec.toFixed(0)} 回/秒
             {scanner.stats.rescued > 0 && `　補正で読めた ${scanner.stats.rescued} 枚`}
           </p>
         )}
