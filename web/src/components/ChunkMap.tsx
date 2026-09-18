@@ -41,7 +41,7 @@ export function ChunkMap({ bitmap, total, version }: { bitmap: Uint8Array; total
         const x = ox + (i % perRow) * cell;
         const y = Math.floor(i / perRow) * cell;
         const s = cell - gap;
-        if (s >= 5) {
+        if (s >= 5 && typeof ctx.roundRect === "function") {  // roundRect は iOS 16 未満に無い
           ctx.beginPath();
           ctx.roundRect(x, y, s, s, Math.min(3, s / 4));
           ctx.fill();

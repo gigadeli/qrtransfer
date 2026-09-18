@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Assembler, type CompletionResult, type ReceivedFile, type Snapshot } from "./lib/assembler";
-import { formatRanges, hex32, parseFrame } from "./lib/protocol";
+import { hex32, parseFrame } from "./lib/protocol";
 import { ChunkMap } from "./components/ChunkMap";
 import { useScanner } from "./useScanner";
 
@@ -22,7 +22,9 @@ export function humanTime(sec: number): string {
 }
 
 function saveFile(file: ReceivedFile): void {
-  const url = URL.createObjectURL(new Blob([file.data as BlobPart], { type: file.mime }));
+  // 種類は常に octet-stream にする。download 属性を無視するブラウザ（アプリ内ブラウザなど）でも、
+  // 受信した HTML・SVG がこのサイトのページとして開かれ、中のスクリプトが動くことがないように
+  const url = URL.createObjectURL(new Blob([file.data as BlobPart], { type: "application/octet-stream" }));
   const a = document.createElement("a");
   a.href = url;
   a.download = file.fileName;
@@ -32,15 +34,14 @@ function saveFile(file: ReceivedFile): void {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-function toShareFile(file: ReceivedFile): File {
-  return new File([file.data as BlobPart], file.fileName, { type: file.mime });
-}
-
-function canShare(file: ReceivedFile): boolean {
+/** 共有メニュー用のファイル。File を作るとデータがコピーされるので、受信結果ごとに 1 回だけ作る。 */
+function makeShareFile(file: ReceivedFile | undefined): File | null {
+  if (!file || !navigator.canShare) return null;
   try {
-    return !!navigator.canShare?.({ files: [toShareFile(file)] });
+    const f = new File([file.data as BlobPart], file.fileName, { type: file.mime });
+    return navigator.canShare({ files: [f] }) ? f : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -82,16 +83,18 @@ export default function App() {
     return () => clearInterval(timer);
   }, [assembler]);
 
-  const missing = useMemo(() => {
-    if (!snap.sessionId || !snap.total || snap.received >= snap.total) return { full: "", display: "" };
-    const m = assembler.missing();
-    return { full: formatRanges(m), display: formatRanges(m, MISSING_DISPLAY_ITEMS) };
+  const missingDisplay = useMemo(() => {
+    if (snap.sessionId === null || !snap.total || snap.received >= snap.total) return "";
+    return assembler.missingText(MISSING_DISPLAY_ITEMS);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assembler, snap.sessionId, snap.received, snap.total]);
 
+  const result = snap.result;
+  const shareFile = useMemo(() => makeShareFile(result?.file), [result]);
+
   const copyMissing = async () => {
     try {
-      await navigator.clipboard.writeText(missing.full);
+      await navigator.clipboard.writeText(assembler.missingText());
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
@@ -104,7 +107,11 @@ export default function App() {
     scanner.setEnhance(on);
   };
 
-  const result = snap.result;
+  const switchSession = () => {
+    if (snap.received > 0 && !confirm("今の受信を中断して、別の転送に切り替えますか？（受信済みのデータは破棄されます）")) return;
+    assembler.switchToConflict();
+  };
+
   const frac = snap.total ? snap.received / snap.total : snap.meta ? 1 : 0;
   const overlay = scanner.overlay && performance.now() - scanner.overlay.time < OVERLAY_TTL_MS ? scanner.overlay : null;
 
@@ -166,8 +173,15 @@ export default function App() {
       {snap.conflictSessionId !== null && (
         <div className="banner warning row">
           <span>⚠ 別の転送を検出しました（session {hex32(snap.conflictSessionId)}）</span>
-          <button onClick={() => assembler.switchToConflict()}>切り替え</button>
+          <button onClick={switchSession}>切り替え</button>
         </div>
+      )}
+
+      {snap.rejected && (
+        <p className="banner warning">
+          ⚠ {snap.rejected.name ? `「${snap.rejected.name}」（${humanSize(snap.rejected.size ?? 0)}）は` : "この転送は"}
+          このページで受信できる大きさ（{humanSize(snap.rejected.limit)}）を超えています。パソコン版の QRTransfer で受信してください。
+        </p>
       )}
 
       {result && (
@@ -184,13 +198,18 @@ export default function App() {
               {!!result.file.skipped?.length && (
                 <p className="muted">スキップした項目: {result.file.skipped.map((s) => s.name).slice(0, 10).join(", ")}</p>
               )}
+              {!!result.file.renamed?.length && (
+                <p className="muted">
+                  名前が重なるため変更した項目: {result.file.renamed.map((r) => `${r.name} → ${r.to}`).slice(0, 10).join(", ")}
+                </p>
+              )}
               <div className="actions">
-                {canShare(result.file) && (
-                  <button className="primary" onClick={() => void navigator.share({ files: [toShareFile(result.file!)] }).catch(() => undefined)}>
+                {shareFile && (
+                  <button className="primary" onClick={() => void navigator.share({ files: [shareFile] }).catch(() => undefined)}>
                     共有・保存
                   </button>
                 )}
-                <button className={canShare(result.file) ? "" : "primary"} onClick={() => saveFile(result.file!)}>
+                <button className={shareFile ? "" : "primary"} onClick={() => saveFile(result.file!)}>
                   ダウンロード
                 </button>
                 <button className="ghost" onClick={() => assembler.reset()}>
@@ -203,7 +222,7 @@ export default function App() {
               <h2>受信失敗</h2>
               <p className="name">{result.meta.name}</p>
               <p>{result.message}</p>
-              <p className="muted">送信をやり直してください。</p>
+              <p className="muted">パソコン側で送信を始め直してください（同じ送信の表示を続けても、この転送は受信しません）。</p>
               <div className="actions">
                 <button className="primary" onClick={() => assembler.reset()}>
                   次の受信へ
@@ -252,11 +271,11 @@ export default function App() {
         </section>
       )}
 
-      {!result && missing.display && (
+      {!result && missingDisplay && (
         <section className="card missing">
           <h2>欠落番号</h2>
           <p className="muted">送信側で R キーを押して入力すると再送モードになります</p>
-          <pre>{missing.display}</pre>
+          <pre>{missingDisplay}</pre>
           <div className="actions">
             <button onClick={() => void copyMissing()}>{copied ? "コピーしました" : "コピー"}</button>
             <button

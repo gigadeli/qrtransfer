@@ -6,24 +6,47 @@
  * - META が届くまでは、最終チャンク以外の長さから chunk_size を推定して長さを検証する。
  * - 全チャンクと META がそろったら、SHA-256（結合後と伸長後）を照合し、保存用のファイルを作る。
  */
-import { decompress, sha256Hex } from "./codec";
+import { TooLargeError, decompress, sha256Hex } from "./codec";
 import { makeZip, readTar, sanitizeFilename } from "./archive";
 import { type Meta, parseMeta } from "./meta";
 import { type Frame, TYPE_META } from "./protocol";
 
-export type Status = "new" | "meta" | "dup" | "conflict" | "finished" | "invalid";
+export type Status = "new" | "meta" | "dup" | "conflict" | "finished" | "invalid" | "too_large";
 
 const CHUNK_SIZE_MIN = 200;
 const CHUNK_SIZE_MAX = 2000;
 const RATE_WINDOW_MS = 5000;
 
+/**
+ * このページで受信できる大きさの上限。データはすべてブラウザのメモリ上に持つため、スマホで落ちない大きさに抑える。
+ * フレームの「総チャンク数」や META の「サイズ」は送信側が名乗る値なので、確保する前に必ずこの上限で確かめる
+ * （偽造したフレーム 1 枚で巨大な領域を確保させられないように）。
+ */
+export const DEFAULT_LIMITS = {
+  maxRawSize: 100 * 1024 * 1024,
+  maxPayloadSize: 100 * 1024 * 1024,
+};
+
+export interface Limits {
+  maxRawSize: number;
+  maxPayloadSize: number;
+}
+
+export interface Rejected {
+  sessionId: number;
+  name?: string;
+  size?: number;
+  limit: number;
+}
+
 export interface ReceivedFile {
   fileName: string;
   data: Uint8Array;
   mime: string;
-  /** bundle のとき: ZIP にまとめたファイル数とスキップした項目 */
+  /** bundle のとき: ZIP にまとめたファイル数、スキップした項目、名前が重なり連番を付けた項目 */
   fileCount?: number;
   skipped?: { name: string; reason: string }[];
+  renamed?: { name: string; to: string }[];
 }
 
 export interface CompletionResult {
@@ -47,6 +70,8 @@ export interface Snapshot {
   conflictSessionId: number | null;
   finishing: boolean;
   result: CompletionResult | null;
+  /** 大きすぎて受け付けなかった転送 */
+  rejected: Rejected | null;
 }
 
 class Session {
@@ -69,11 +94,11 @@ class Session {
   }
 }
 
+/** 共有メニューに渡すときの種類。ブラウザが開いて中身を実行し得る種類（HTML・SVG など）は使わない。 */
 const MIME: Record<string, string> = {
   txt: "text/plain", csv: "text/csv", json: "application/json", pdf: "application/pdf",
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
-  zip: "application/zip", mp4: "video/mp4", mov: "video/quicktime", mp3: "audio/mpeg",
-  html: "text/html", xml: "application/xml", md: "text/markdown",
+  zip: "application/zip", mp4: "video/mp4", mov: "video/quicktime", mp3: "audio/mpeg", md: "text/markdown",
 };
 
 export function mimeOf(name: string): string {
@@ -84,24 +109,49 @@ export function mimeOf(name: string): string {
 export class Assembler {
   private session: Session | null = null;
   private finishedIds = new Set<number>();
+  private rejectedIds = new Set<number>();
   private conflictId: number | null = null;
   private conflictTotal = 0;
+  private readonly limits: Limits;
+  private readonly maxTotal: number;
   result: CompletionResult | null = null;
+  rejected: Rejected | null = null;
   onComplete?: (r: CompletionResult) => void;
   onChange?: () => void;
+
+  constructor(limits: Partial<Limits> = {}) {
+    this.limits = { ...DEFAULT_LIMITS, ...limits };
+    this.maxTotal = Math.ceil(this.limits.maxPayloadSize / CHUNK_SIZE_MIN);
+  }
+
+  private reject(sid: number, info: Omit<Rejected, "sessionId" | "limit"> = {}): Status {
+    this.rejectedIds.add(sid);
+    if (this.rejected?.sessionId !== sid || info.name) {
+      this.rejected = { sessionId: sid, limit: this.limits.maxRawSize, ...info };
+      this.onChange?.();
+    }
+    return "too_large";
+  }
 
   feed(frame: Frame): Status {
     const sid = frame.sessionId;
     if (this.finishedIds.has(sid)) return "finished";
+    if (this.rejectedIds.has(sid)) return "too_large";
     let s = this.session;
     if (s === null) {
+      if (frame.total > this.maxTotal) return this.reject(sid);
       s = this.session = new Session(sid, frame.total);
       this.conflictId = null;
+      if (this.rejected) {
+        this.rejected = null;
+        this.onChange?.();
+      }
     } else if (sid !== s.sessionId) {
       if (s.finished) {
         this.reset();
         return this.feed(frame); // 完了表示中に新しい転送が来たら、そのまま受信する
       }
+      if (frame.total > this.maxTotal) return this.reject(sid);
       this.conflictId = sid;
       this.conflictTotal = frame.total;
       return "conflict";
@@ -129,6 +179,11 @@ export class Assembler {
     if (s.meta) return "dup";
     const meta = parseMeta(frame.payload);
     if (!meta || meta.total !== s.total) return "invalid";
+    if (meta.raw_size > this.limits.maxRawSize || meta.payload_size > this.limits.maxPayloadSize) {
+      // 受信済みの分も捨てる（このセッションの以後のフレームは無視する）
+      this.session = null;
+      return this.reject(s.sessionId, { name: meta.name, size: meta.raw_size });
+    }
     if (s.chunkSize !== null && s.chunkSize !== meta.chunk_size) return "invalid";
     s.meta = meta;
     s.chunkSize = meta.chunk_size;
@@ -197,8 +252,9 @@ export class Assembler {
       }
       let raw: Uint8Array;
       try {
-        raw = await decompress(meta.compression, payload, meta.raw_size);
+        raw = await decompress(meta.compression, payload, Math.min(meta.raw_size, this.limits.maxRawSize));
       } catch (e) {
+        if (e instanceof TooLargeError) return fail("NG: 伸長後のサイズが META の値を超えています");
         return fail(`NG: 伸長に失敗しました (${(e as Error).message})`);
       }
       if (raw.length !== meta.raw_size || (await sha256Hex(raw)) !== meta.sha256_raw) {
@@ -214,7 +270,7 @@ export class Assembler {
         ok: true, message: "OK: SHA-256 一致", ...base,
         file: {
           fileName: `${name}.zip`, data: zip, mime: "application/zip",
-          fileCount: tar.entries.filter((e) => !e.dir).length, skipped: tar.skipped,
+          fileCount: tar.entries.filter((e) => !e.dir).length, skipped: tar.skipped, renamed: tar.renamed,
         },
       };
     } catch (e) {
@@ -223,7 +279,7 @@ export class Assembler {
   }
 
   switchToConflict(): boolean {
-    if (this.conflictId === null) return false;
+    if (this.conflictId === null || this.conflictTotal > this.maxTotal) return false;
     this.session = new Session(this.conflictId, this.conflictTotal);
     this.conflictId = null;
     this.result = null;
@@ -252,12 +308,19 @@ export class Assembler {
     return out;
   }
 
+  /** 欠落番号を "12,57-60,99" の形で返す（受信済みの印から直接作るので、件数が多くても軽い）。 */
+  missingText(maxItems?: number): string {
+    const s = this.session;
+    return s ? rangesOfZeros(s.bitmap, maxItems) : "";
+  }
+
   snapshot(): Snapshot {
     const s = this.session;
     if (!s) {
       return {
         sessionId: null, total: 0, received: 0, meta: null, bitmap: new Uint8Array(0), ratePerSec: 0,
         bytesPerSec: 0, etaSec: null, conflictSessionId: null, finishing: false, result: this.result,
+        rejected: this.rejected,
       };
     }
     const now = performance.now();
@@ -270,6 +333,28 @@ export class Assembler {
       ratePerSec: rate, bytesPerSec: rate * (s.chunkSize ?? 0),
       etaSec: rate > 0 && remaining > 0 ? remaining / rate : null,
       conflictSessionId: s.finished ? null : this.conflictId, finishing: s.finishing, result: this.result,
+      rejected: this.rejected,
     };
   }
+}
+
+/** bitmap の 0 の位置を区間表記にする。maxItems を超える分は ",…" にまとめる。 */
+export function rangesOfZeros(bitmap: Uint8Array, maxItems?: number): string {
+  const parts: string[] = [];
+  const n = bitmap.length;
+  let i = 0;
+  while (i < n) {
+    if (bitmap[i]) {
+      i++;
+      continue;
+    }
+    if (maxItems !== undefined && parts.length >= maxItems) {
+      parts.push("…");
+      break;
+    }
+    const start = i;
+    while (i < n && !bitmap[i]) i++;
+    parts.push(start === i - 1 ? String(start) : `${start}-${i - 1}`);
+  }
+  return parts.join(",");
 }

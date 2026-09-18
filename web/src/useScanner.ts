@@ -40,6 +40,8 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
   const countRef = useRef({ n: 0, t0: performance.now() });
   const wakeRef = useRef<WakeLockSentinelLike | null>(null);
   const timerRef = useRef<number | null>(null);
+  const errorsRef = useRef(0);
+  const startRef = useRef<(id?: string | null) => Promise<void>>(async () => undefined);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<Overlay | null>(null);
@@ -105,7 +107,13 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
         c.n = 0;
         c.t0 = now;
       }
-      if (res.error) console.warn(res.error);
+      if (res.error) {
+        console.warn(res.error);
+        // 読み取り部品（WebAssembly）の読み込み失敗などは毎回失敗するので、続いたら画面に出す
+        if (++errorsRef.current === 10) setError(`読み取り処理でエラーが発生しています: ${res.error}`);
+      } else {
+        errorsRef.current = 0;
+      }
     };
     worker.onerror = (e) => {
       busyRef.current = false;
@@ -147,6 +155,11 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
           : await navigator.mediaDevices.getUserMedia({ video, audio: false });
         streamRef.current = stream;
         const track = stream.getVideoTracks()[0];
+        track.addEventListener("ended", () => {
+          // 他のアプリがカメラを使った・端末がカメラを止めた。表示中なら開き直す（非表示なら戻ったときに開き直す）
+          if (streamRef.current !== stream || !runningRef.current) return;
+          if (document.visibilityState === "visible") void startRef.current();
+        });
         try {
           await track.applyConstraints({ advanced: [{ focusMode: "continuous" } as MediaTrackConstraintSet] });
         } catch {
@@ -189,6 +202,28 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
     },
     [deviceId, ensureWorker, grab, loop, releaseStream],
   );
+
+  startRef.current = start;
+
+  // アプリの切り替えや画面ロックから戻ったとき: 止まったカメラを開き直し、画面を消さない設定も取り直す
+  useEffect(() => {
+    const onVisible = async () => {
+      if (document.visibilityState !== "visible" || !runningRef.current) return;
+      const track = streamRef.current?.getVideoTracks()[0];
+      if (!track || track.readyState === "ended") {
+        await startRef.current();
+        return;
+      }
+      try {
+        const wl = (navigator as Navigator & { wakeLock?: { request: (t: "screen") => Promise<WakeLockSentinelLike> } }).wakeLock;
+        wakeRef.current = (await wl?.request("screen")) ?? null;
+      } catch {
+        /* 対応していなければ無視 */
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
 
   const stop = useCallback(() => {
     runningRef.current = false;

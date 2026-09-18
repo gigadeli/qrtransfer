@@ -17,6 +17,8 @@ export interface ArchiveEntry {
 export interface TarResult {
   entries: ArchiveEntry[];
   skipped: { name: string; reason: string }[];
+  /** 名前を安全な形に直した結果、他と重なったため連番を付けた項目 */
+  renamed: { name: string; to: string }[];
 }
 
 const INVALID_CHARS = /[<>:"|?*\x00-\x1f]/g;
@@ -97,7 +99,8 @@ function parsePax(data: Uint8Array): Record<string, string> {
 export function readTar(tar: Uint8Array): TarResult {
   const entries: ArchiveEntry[] = [];
   const skipped: TarResult["skipped"] = [];
-  const seen = new Set<string>();
+  const renamed: TarResult["renamed"] = [];
+  const names = new NameTable();
   let off = 0;
   let pax: Record<string, string> = {};
   let globalPax: Record<string, string> = {};
@@ -146,12 +149,62 @@ export function readTar(tar: Uint8Array): TarResult {
       skipped.push({ name, reason: "安全でないパス" });
       continue;
     }
-    const path = parts.join("/");
-    if (seen.has(path + (isDir ? "/" : ""))) continue;
-    seen.add(path + (isDir ? "/" : ""));
-    entries.push({ path, dir: isDir, data: isDir ? new Uint8Array(0) : data.slice(), mtime });
+    const placed = names.place(parts, isDir);
+    if (placed === null) {
+      skipped.push({ name, reason: "同じ名前のファイルがあるため、フォルダを作れません" });
+      continue;
+    }
+    if (placed === "") continue; // 同じフォルダが 2 回出てきた
+    if (placed !== parts.join("/")) renamed.push({ name, to: placed });
+    entries.push({ path: placed, dir: isDir, data: isDir ? new Uint8Array(0) : data.slice(), mtime });
   }
-  return { entries, skipped };
+  return { entries, skipped, renamed };
+}
+
+/**
+ * 展開先で衝突しない名前を割り当てる。iPhone・Windows は大文字と小文字を区別しないため、比較は小文字・NFC で行う。
+ * ファイル名が重なったら「名前 (2).拡張子」のように連番を付ける（黙って捨てない）。
+ */
+class NameTable {
+  private kinds = new Map<string, "file" | "dir">();
+
+  private static key(path: string): string {
+    return path.normalize("NFC").toLowerCase();
+  }
+
+  /** 戻り値: 割り当てたパス / "" = 既にあるフォルダ / null = 親フォルダの位置にファイルがある */
+  place(parts: string[], isDir: boolean): string | null {
+    for (let i = 1; i < parts.length; i++) {
+      const parent = parts.slice(0, i).join("/");
+      const k = NameTable.key(parent);
+      const kind = this.kinds.get(k);
+      if (kind === "file") return null;
+      if (!kind) this.kinds.set(k, "dir");
+    }
+    const path = parts.join("/");
+    const kind = this.kinds.get(NameTable.key(path));
+    if (isDir) {
+      if (kind === "dir") return "";
+      if (kind === undefined) {
+        this.kinds.set(NameTable.key(path), "dir");
+        return path;
+      }
+    } else if (kind === undefined) {
+      this.kinds.set(NameTable.key(path), "file");
+      return path;
+    }
+    const dir = parts.slice(0, -1);
+    const last = parts[parts.length - 1];
+    const dot = isDir ? -1 : last.lastIndexOf(".");
+    const [stem, ext] = dot > 0 ? [last.slice(0, dot), last.slice(dot)] : [last, ""];
+    for (let n = 2; ; n++) {
+      const candidate = [...dir, `${stem} (${n})${ext}`].join("/");
+      if (!this.kinds.has(NameTable.key(candidate))) {
+        this.kinds.set(NameTable.key(candidate), isDir ? "dir" : "file");
+        return candidate;
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------- zip
@@ -163,7 +216,13 @@ function dosDateTime(sec: number): [number, number] {
   return [time, date];
 }
 
-/** 無圧縮（stored）の ZIP を作る。ファイル名は UTF-8（フラグ 0x0800）。 */
+const ZIP16_MAX = 0xffff;
+
+/**
+ * 無圧縮（stored）の ZIP を作る。ファイル名は UTF-8（フラグ 0x0800）。
+ * 65,535 件を超える場合は ZIP64 の終端レコードを付ける（件数を 16 ビットに収められないため）。
+ * 1 ファイル・全体とも 4GB 未満の前提（受信できる大きさはそれよりずっと小さく制限している）。
+ */
 export function makeZip(entries: ArchiveEntry[]): Uint8Array {
   const enc = new TextEncoder();
   const locals: Uint8Array[] = [];
@@ -207,16 +266,37 @@ export function makeZip(entries: ArchiveEntry[]): Uint8Array {
     offset += local.length + data.length;
   }
   const centralSize = centrals.reduce((n, c) => n + c.length, 0);
+  const tail: Uint8Array[] = [];
+  const zip64 = entries.length > ZIP16_MAX;
+  if (zip64) {
+    const rec = new Uint8Array(56);
+    const rv = new DataView(rec.buffer);
+    rv.setUint32(0, 0x06064b50, true); // ZIP64 end of central directory record
+    rv.setBigUint64(4, 44n, true);
+    rv.setUint16(12, 45, true);
+    rv.setUint16(14, 45, true);
+    rv.setBigUint64(24, BigInt(entries.length), true);
+    rv.setBigUint64(32, BigInt(entries.length), true);
+    rv.setBigUint64(40, BigInt(centralSize), true);
+    rv.setBigUint64(48, BigInt(offset), true);
+    const loc = new Uint8Array(20);
+    const lv = new DataView(loc.buffer);
+    lv.setUint32(0, 0x07064b50, true); // ZIP64 end of central directory locator
+    lv.setBigUint64(8, BigInt(offset + centralSize), true);
+    lv.setUint32(16, 1, true);
+    tail.push(rec, loc);
+  }
   const end = new Uint8Array(22);
   const ev = new DataView(end.buffer);
   ev.setUint32(0, 0x06054b50, true);
-  ev.setUint16(8, entries.length, true);
-  ev.setUint16(10, entries.length, true);
+  ev.setUint16(8, Math.min(entries.length, ZIP16_MAX), true);
+  ev.setUint16(10, Math.min(entries.length, ZIP16_MAX), true);
   ev.setUint32(12, centralSize, true);
   ev.setUint32(16, offset, true);
-  const out = new Uint8Array(offset + centralSize + end.length);
+  tail.push(end);
+  const out = new Uint8Array(offset + centralSize + tail.reduce((n, t) => n + t.length, 0));
   let p = 0;
-  for (const part of [...locals, ...centrals, end]) {
+  for (const part of [...locals, ...centrals, ...tail]) {
     out.set(part, p);
     p += part.length;
   }

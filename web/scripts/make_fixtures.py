@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import numpy as np  # noqa: E402
 
-from qrtransfer import packer, qrgen  # noqa: E402
+from qrtransfer import packer, protocol, qrgen  # noqa: E402
 
 OUT = ROOT / "web" / "test" / "fixtures"
 SESSION = 0x89ABCDEF
@@ -114,6 +114,15 @@ def main() -> None:
         case("other_session", packer.Packed("other.txt", "file", b"other session" * 50, None), "none",
              session_id=0x12345678),
     ]
+    # 伸長爆弾: 伸長すると 50MB になるのに、META では 1MB と名乗る（伸長を途中で打ち切れるかの確認）
+    for method in ("lzma", "zlib"):
+        c = case(f"bomb_{method}", packer.Packed("bomb.bin", "file", b"\0" * 50_000_000, None), method,
+                 chunk_size=2000, session_id=0x0B0B0000 + len(method))
+        meta_frame = protocol.parse_frame(base64.b64decode(c["meta"]))
+        meta = packer.parse_meta(meta_frame.payload)
+        meta["raw_size"] = 1_000_000
+        c["meta"] = b64(protocol.build_meta_frame(meta_frame.session_id, meta_frame.total, packer.meta_payload(meta)))
+        cases.append(c)
     (OUT / "frames.json").write_text(json.dumps({"cases": cases}, ensure_ascii=False), encoding="utf-8")
 
     # QR 画像（text_zlib を 1 モジュール 4px で）
