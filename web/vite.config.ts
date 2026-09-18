@@ -1,5 +1,6 @@
 /// <reference types="vitest/config" />
 import react from "@vitejs/plugin-react";
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -36,10 +37,27 @@ function offline(): Plugin {
   };
 }
 
+/** ページに表示する版: アプリのバージョン（Python 版と共通）・コミット・ビルド日時。更新されたかを見分けられるように。 */
+function buildInfo(): string {
+  const init = readFileSync(resolve(import.meta.dirname, "../src/qrtransfer/__init__.py"), "utf-8");
+  const version = /__version__\s*=\s*"([^"]+)"/.exec(init)?.[1] ?? "?";
+  let commit = process.env.GITHUB_SHA ?? "";
+  if (!commit) {
+    try {
+      commit = execSync("git rev-parse HEAD", { encoding: "utf-8" }).trim();
+    } catch {
+      commit = "";
+    }
+  }
+  const date = new Date().toLocaleString("sv-SE", { timeZone: "Asia/Tokyo" }).slice(0, 16); // YYYY-MM-DD HH:mm（日本時間）
+  return [`v${version}`, commit.slice(0, 7), date].filter(Boolean).join(" · ");
+}
+
 // GitHub Pages ではリポジトリ名のパス（/qrtransfer/）で公開される。ローカルでは / のまま
 export default defineConfig({
   base: process.env.QRT_BASE ?? "/",
   plugins: [react(), offline()],
+  define: { __BUILD_INFO__: JSON.stringify(buildInfo()) },
   worker: { format: "es" },
   build: { target: "es2022" },
   test: {

@@ -122,6 +122,7 @@ export default function App() {
       <header className="top">
         <h1>QRTransfer</h1>
         <span className="muted">受信</span>
+        <span className="build muted">{__BUILD_INFO__}</span>
       </header>
 
       <section className={`camera card ${scanner.running ? "on" : ""}`}>
