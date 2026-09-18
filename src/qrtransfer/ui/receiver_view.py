@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame, QGridL
 
 from .. import assembler as asm_mod
 from .. import protocol
+from ..calibration import CalibrationResult, exposure_label
 from ..camera import FOCUS_MAX, FOCUS_MIN, STRATEGIES, STRATEGY_AUTO, CameraMode, CameraThread, probe_cameras
 from ..decoder import DecodeThread, Detection
 from ..settings import RESOLUTIONS, Settings
@@ -34,8 +35,33 @@ class PreviewWidget(QWidget):
         self.det_size = (1, 1)
         self.det_time = 0.0
         self.message = "カメラ停止中"
+        self.overlay = ""  # 画像の上部に重ねて表示する文（カメラの自動調整中の案内）
+        self.overlay_progress = -1.0
         self.setMinimumSize(320, 180)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def set_overlay(self, text: str, progress: float = -1.0) -> None:
+        self.overlay = text
+        self.overlay_progress = progress
+        self.update()
+
+    def _draw_overlay(self, p: QPainter) -> None:
+        if not self.overlay:
+            return
+        font = p.font()
+        font.setPointSizeF(max(font.pointSizeF(), 11))
+        p.setFont(font)
+        inner = QRectF(18, 14, self.width() - 36, 1000)
+        bound = p.boundingRect(inner, Qt.TextFlag.TextWordWrap, self.overlay)
+        box = QRectF(8, 8, self.width() - 16, bound.height() + 26)
+        p.fillRect(box, QColor(0, 0, 0, 170))
+        p.setPen(QColor(255, 255, 255))
+        p.drawText(QRectF(18, 14, self.width() - 36, bound.height() + 4), Qt.TextFlag.TextWordWrap, self.overlay)
+        if self.overlay_progress >= 0:
+            bar = QRectF(box.left() + 10, box.bottom() - 9, box.width() - 20, 4)
+            p.fillRect(bar, QColor(90, 90, 90))
+            p.fillRect(QRectF(bar.left(), bar.top(), bar.width() * self.overlay_progress, bar.height()),
+                       QColor(60, 170, 255))
 
     def set_image(self, img: QImage) -> None:
         self.image = img
@@ -53,6 +79,7 @@ class PreviewWidget(QWidget):
         if self.image is None:
             p.setPen(QColor(220, 220, 220))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.message)
+            self._draw_overlay(p)
             return
         iw, ih = self.image.width(), self.image.height()
         s = min(self.width() / iw, self.height() / ih)
@@ -60,6 +87,7 @@ class PreviewWidget(QWidget):
         ox, oy = (self.width() - tw) / 2, (self.height() - th) / 2
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         p.drawImage(QRectF(ox, oy, tw, th), self.image)
+        self._draw_overlay(p)
         if time.monotonic() - self.det_time > DETECTION_TTL_SEC:
             return
         dw, dh = self.det_size
@@ -174,6 +202,30 @@ class ReceiverView(QWidget):
         for w in (self.chk_enhance, self.lbl_focus, self.slider_focus, self.lbl_focus_value, self.lbl_sharp):
             cl2.addWidget(w)
         cl2.addStretch(1)
+        # 3 行目: ピント・露出の自動調整（受信を始める前に 1 回だけ行い、値を固定する）
+        cl3 = QHBoxLayout()
+        cam_rows.addLayout(cl3)
+        self.btn_calib = QPushButton("ピント・露出を自動調整")
+        self.btn_calib.setToolTip(
+            "送信側の待機画面（最初の QR）をカメラに映した状態で押してください。\n"
+            "フォーカスと露光時間を順に振って、最も読み取りやすい値に固定します（10〜20 秒ほど）。\n"
+            "受信中にピントや明るさが勝手に変わって読み取りが途切れるのを防ぎます。")
+        self.btn_calib.setEnabled(False)
+        self.btn_calib.clicked.connect(self.toggle_calibration)
+        self.chk_calib_start = QCheckBox("受信開始時に自動調整する")
+        self.chk_calib_start.setToolTip("受信開始後、QR がカメラに映ったら自動で調整を始めます。")
+        self.chk_calib_start.setChecked(settings.calibrate_on_start)
+        self.chk_calib_start.toggled.connect(self._apply_calibrate_on_start)
+        self.btn_calib_reset = QPushButton("自動に戻す")
+        self.btn_calib_reset.setToolTip("固定したピント・露出をやめて、オートフォーカス・自動露出に戻します。")
+        self.btn_calib_reset.clicked.connect(self.reset_calibration)
+        self.lbl_exposure = QLabel("")
+        self.lbl_calib = QLabel("")
+        self.lbl_calib.setWordWrap(True)
+        for w in (self.btn_calib, self.chk_calib_start, self.btn_calib_reset, self.lbl_exposure):
+            cl3.addWidget(w)
+        cl3.addWidget(self.lbl_calib, 1)
+        self._update_exposure_label()
         self._update_focus_enabled()
         root.addWidget(cam_box)
 
@@ -346,7 +398,8 @@ class ReceiverView(QWidget):
                 "（暗いと露光時間が延びて fps が落ちるカメラがあります）を試してください。")
 
     def _update_hint(self) -> None:
-        parts = [t for t in (self._camera_warning, self._reading_hint) if t]
+        reading = "" if self.is_calibrating() else self._reading_hint  # 調整中はピントを振るので読めなくて当然
+        parts = [t for t in (self._camera_warning, reading) if t]
         self.hint_bar.setText("\n".join(parts))
         self.hint_bar.setVisible(bool(parts))
 
@@ -358,8 +411,10 @@ class ReceiverView(QWidget):
 
     def _update_focus_enabled(self) -> None:
         manual = not self.chk_af.isChecked()
-        self.slider_focus.setEnabled(manual)
+        busy = self.is_calibrating()
+        self.slider_focus.setEnabled(manual and not busy)
         self.lbl_focus.setEnabled(manual)
+        self.chk_af.setEnabled(not busy)
         self.lbl_focus_value.setText(str(self.slider_focus.value()) if manual else "自動")
 
     def _apply_autofocus(self, on: bool) -> None:
@@ -411,6 +466,85 @@ class ReceiverView(QWidget):
                 "・送信側でチャンクサイズを小さくする（QR のセルが大きくなりボケに強くなる）か、"
                 "ウィンドウ表示なら全画面にする").format(bad_ratio * 100)
 
+    # ------------------------------------------------------------------ 自動調整
+    def is_calibrating(self) -> bool:
+        return getattr(self, "_calibrating", False)
+
+    def _update_exposure_label(self) -> None:
+        e = self.settings.exposure
+        self.lbl_exposure.setText("露出: 自動" if e is None else f"露出: {exposure_label(e)}（固定）")
+
+    def _apply_calibrate_on_start(self, on: bool) -> None:
+        self.settings.calibrate_on_start = on
+        self.settings.sync()
+
+    def toggle_calibration(self) -> None:
+        if self.camera is None:
+            return
+        if self.is_calibrating():
+            self.camera.cancel_calibration()
+            self.preview.set_overlay("調整を中止しています…")
+        else:
+            self._set_calibrating(True)
+            self.camera.request_calibration()
+
+    def _set_calibrating(self, on: bool) -> None:
+        self._calibrating = on
+        self.btn_calib.setText("調整を中止" if on else "ピント・露出を自動調整")
+        self.btn_calib_reset.setEnabled(not on)
+        self.combo_strategy.setEnabled(not on)
+        self.combo_res.setEnabled(not on)
+        self._update_focus_enabled()
+        self._update_hint()
+        if on:
+            self.lbl_calib.setText("")
+            self.preview.set_overlay("カメラの自動調整を準備しています…", 0.0)
+        else:
+            self.preview.set_overlay("")
+
+    def _on_calibration_progress(self, text: str, frac: float) -> None:
+        if not self.is_calibrating():
+            self._set_calibrating(True)  # 受信開始時の自動調整
+        self.preview.set_overlay(text + "\n（調整が終わるまで送信を始めないでください）", frac)
+
+    def _on_calibration_done(self, result: CalibrationResult) -> None:
+        self._set_calibrating(False)
+        s = result.state
+        if result.ok:
+            self.settings.autofocus = s.autofocus
+            if not s.autofocus and s.focus >= 0:
+                self.settings.manual_focus = s.focus
+            self.settings.exposure = s.exposure
+            self.settings.sync()
+            self.chk_af.blockSignals(True)
+            self.chk_af.setChecked(s.autofocus)
+            self.chk_af.blockSignals(False)
+            if not s.autofocus and s.focus >= 0:
+                self.slider_focus.blockSignals(True)
+                self.slider_focus.setValue(max(FOCUS_MIN, min(FOCUS_MAX, s.focus)))
+                self.slider_focus.blockSignals(False)
+            if result.best_variant and self.decoder is not None:
+                self.decoder.prefer_variant(result.best_variant)
+            self.lbl_calib.setText("✔ 調整完了: " + result.message.replace("\n", "　"))
+            self.status.setText("カメラの調整が終わりました。送信側で Space / Enter を押して送信を始めてください")
+        else:
+            self.lbl_calib.setText("⚠ " + result.message)
+        self._update_exposure_label()
+        self._update_focus_enabled()
+
+    def reset_calibration(self) -> None:
+        """固定したピント・露出をやめて、自動に戻す。"""
+        self.settings.exposure = None
+        self.settings.sync()
+        self._update_exposure_label()
+        if self.camera is not None:
+            self.camera.set_exposure(None)
+        self.lbl_calib.setText("")
+        if self.chk_af.isChecked():
+            self._apply_autofocus(True)
+        else:
+            self.chk_af.setChecked(True)  # _apply_autofocus で保存・カメラへの反映も行う
+
     def probe(self) -> None:
         was_running = self.camera is not None
         if was_running:
@@ -453,8 +587,12 @@ class ReceiverView(QWidget):
         manual_focus = self.slider_focus.value() if self.settings.manual_focus >= 0 else -1
         strategy = self.combo_strategy.currentData()
         self.camera = CameraThread(idx, w, h, self.chk_af.isChecked(), manual_focus, strategy=strategy,
-                                   preferred=self.settings.preferred_strategy(idx, w, h), parent=self)
+                                   preferred=self.settings.preferred_strategy(idx, w, h),
+                                   exposure=self.settings.exposure,
+                                   calibrate_on_start=self.chk_calib_start.isChecked(), parent=self)
         self.camera.mode_selected.connect(self._on_mode_selected)
+        self.camera.calibration_progress.connect(self._on_calibration_progress)
+        self.camera.calibration_done.connect(self._on_calibration_done)
         self.decoder = DecodeThread(self.camera.source, self.assembler, enhance=self.chk_enhance.isChecked(),
                                     parent=self)
         self.camera.preview.connect(self.preview.set_image)
@@ -484,6 +622,9 @@ class ReceiverView(QWidget):
                 t.wait(5000)
                 t.deleteLater()
         self.camera = self.decoder = None
+        self.btn_calib.setEnabled(False)
+        if self.is_calibrating():
+            self._set_calibrating(False)
         self.assembler.flush()
         self.btn_camera.setText("受信開始")
         self.lbl_cam.setText("")
@@ -497,6 +638,7 @@ class ReceiverView(QWidget):
 
     def _on_camera_opened(self, ok: bool, text: str) -> None:
         self.lbl_cam.setText(text)
+        self.btn_calib.setEnabled(ok)
         if not ok:
             self.stop_camera()
             self.preview.message = text

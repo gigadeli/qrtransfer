@@ -133,6 +133,11 @@ class RobustDecoder:
         self.roi = (max(0, int(x0 - mx)), max(0, int(y0 - my)), min(w, int(x1 + mx)), min(h, int(y1 + my)))
         self._miss = 0
 
+    def prefer(self, name: str) -> None:
+        """指定した補正を最初に試すようにする（カメラの自動調整で効くと分かった補正）。"""
+        if name in self.scores:
+            self.scores[name] = max(self.scores.values()) + 3.0
+
     def _ordered_variants(self) -> list[Variant]:
         # 最近成功した補正から試す（同点なら定義順）
         return sorted(self.variants, key=lambda v: -self.scores[v.name])
@@ -244,6 +249,9 @@ class DecodeThread(QThread):
 
     def set_enhance(self, on: bool) -> None:
         self.decoder.enhance = on  # bool の代入はスレッド間でも安全
+
+    def prefer_variant(self, name: str) -> None:
+        self.decoder.prefer(name)  # dict の 1 要素の代入なので、読み取りスレッドと競合しても壊れない
 
     def stop(self) -> None:
         self._stop.set()

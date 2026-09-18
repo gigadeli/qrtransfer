@@ -249,15 +249,28 @@ class FrameSource:
 FOCUS_MIN, FOCUS_MAX = 0, 255  # CAP_PROP_FOCUS の範囲はカメラによって異なる（多くの UVC カメラは 0〜255）
 
 
+class _AnyEvent:
+    """複数の Event のどれかが立っているか（Calibrator の中止判定用）。"""
+
+    def __init__(self, *events: threading.Event):
+        self.events = events
+
+    def is_set(self) -> bool:
+        return any(e.is_set() for e in self.events)
+
+
 class CameraThread(QThread):
     preview = Signal(QImage)
     opened = Signal(bool, str)  # (成功, 説明)
     fps_measured = Signal(float)
     focus_value = Signal(int)  # 開いたときのフォーカス値（取得できない場合は -1）
     mode_selected = Signal(object)  # CameraMode（選ばれた接続方式と実測 fps）
+    calibration_progress = Signal(str, float)  # (説明, 0〜1)
+    calibration_done = Signal(object)  # calibration.CalibrationResult
 
     def __init__(self, index: int, width: int, height: int, autofocus: bool, manual_focus: int = -1,
-                 strategy: str = STRATEGY_AUTO, preferred: str | None = None, parent=None):
+                 strategy: str = STRATEGY_AUTO, preferred: str | None = None, exposure: float | None = None,
+                 calibrate_on_start: bool = False, parent=None):
         super().__init__(parent)
         self.index = index
         self.width = width
@@ -266,12 +279,19 @@ class CameraThread(QThread):
         self.manual_focus = manual_focus  # -1 = 指定しない（カメラの現在値のまま）
         self.strategy = strategy
         self.preferred = preferred
+        self.exposure = exposure  # None = 自動露出
+        self.calibrating = False
         self.mode: CameraMode | None = None
         self.tried: list[CameraMode] = []
         self.source = FrameSource()
         self._stop = threading.Event()
         self._props_lock = threading.Lock()
         self._pending_props: dict[int, float] = {}
+        self.calibrator_options: dict = {}  # Calibrator への追加の引数（テスト用）
+        self._calib_request = threading.Event()
+        self._calib_cancel = threading.Event()
+        if calibrate_on_start:
+            self._calib_request.set()
 
     def stop(self) -> None:
         self._stop.set()
@@ -290,6 +310,23 @@ class CameraThread(QThread):
         if not self.autofocus:
             self._request({cv2.CAP_PROP_AUTOFOCUS: 0, cv2.CAP_PROP_FOCUS: self.manual_focus})
 
+    def set_exposure(self, value: float | None) -> None:
+        """撮影中に露出を変える（None = 自動露出）。"""
+        self.exposure = value
+        if value is None:
+            self._request({cv2.CAP_PROP_AUTO_EXPOSURE: 1})
+        else:
+            self._request({cv2.CAP_PROP_AUTO_EXPOSURE: 0, cv2.CAP_PROP_EXPOSURE: value})
+
+    def request_calibration(self) -> None:
+        """ピント・露出の自動調整を始める（QR が映るまで待ってから行う）。"""
+        self._calib_cancel.clear()
+        self._calib_request.set()
+
+    def cancel_calibration(self) -> None:
+        self._calib_request.clear()
+        self._calib_cancel.set()
+
     def _request(self, props: dict[int, float]) -> None:
         with self._props_lock:
             self._pending_props.update(props)
@@ -304,13 +341,58 @@ class CameraThread(QThread):
                 pass
 
     def _configure_focus(self, cap: cv2.VideoCapture) -> None:
-        # フォーカスの設定は撮影形式を変えないので、接続方式が決まった後に行う
+        # フォーカス・露出の設定は撮影形式を変えないので、接続方式が決まった後に行う
         if self.autofocus:
             cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
         else:
             cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
             if self.manual_focus >= 0:
                 cap.set(cv2.CAP_PROP_FOCUS, self.manual_focus)
+        if self.exposure is not None:
+            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0)
+            cap.set(cv2.CAP_PROP_EXPOSURE, self.exposure)
+
+    def _restore_auto(self, cap: cv2.VideoCapture) -> None:
+        """閉じる前にオートフォーカス・自動露出に戻す（設定はドライバに残り、他のアプリにも影響するため）。
+        固定した値は設定ファイルに保存してあり、次に開いたときに設定し直す。"""
+        try:
+            if not self.autofocus:
+                cap.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+            if self.exposure is not None:
+                cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
+        except cv2.error:
+            pass
+
+    def _calibrate(self, cap: cv2.VideoCapture) -> None:
+        from .calibration import CameraState, Calibrator
+
+        self._calib_request.clear()
+        self._calib_cancel.clear()
+        self.calibrating = True
+        last_preview = [0.0]
+
+        def sink(frame: np.ndarray) -> None:
+            self.source.put(frame)  # 調整中も読み取りは続ける（受信中に押されてもデータを取りこぼさない）
+            now = time.monotonic()
+            if now - last_preview[0] >= PREVIEW_INTERVAL_SEC:
+                last_preview[0] = now
+                self.preview.emit(bgr_to_qimage(frame, PREVIEW_MAX_WIDTH))
+
+        with self._props_lock:
+            self._pending_props.clear()  # 調整前に頼まれた変更は、調整結果で上書きされるので捨てる
+        initial = CameraState(self.autofocus, self.manual_focus, self.exposure)
+        calib = Calibrator(cap, initial, stop=_AnyEvent(self._stop, self._calib_cancel),
+                           progress=self.calibration_progress.emit, sink=sink, log=append_camera_log,
+                           **self.calibrator_options)
+        try:
+            result = calib.run()
+        finally:
+            self.calibrating = False
+        self.autofocus = result.state.autofocus
+        self.manual_focus = result.state.focus
+        self.exposure = result.state.exposure
+        if not self._stop.is_set():
+            self.calibration_done.emit(result)
 
     def run(self) -> None:
         cap, mode, self.tried = open_best(self.index, self.width, self.height, self.strategy, self.preferred,
@@ -334,6 +416,10 @@ class CameraThread(QThread):
             count, t0 = 0, time.monotonic()
             failures = 0
             while not self._stop.is_set():
+                if self._calib_request.is_set():
+                    self._calibrate(cap)
+                    count, t0 = 0, time.monotonic()
+                    continue
                 self._apply_pending(cap)
                 ok, frame = cap.read()
                 if not ok or frame is None:
@@ -355,4 +441,5 @@ class CameraThread(QThread):
                     count, t0 = 0, now
         finally:
             if cap is not None:
+                self._restore_auto(cap)
                 cap.release()

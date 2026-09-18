@@ -202,7 +202,7 @@ class FullscreenQR(QWidget):
             p.setPen(QColor(150, 90, 0))
             mode = "ウィンドウ" if self.want_fullscreen else "全画面"
             candidates = (
-                f"待機中（最初の QR を表示中）― 受信側の準備ができたら Space / Enter で送信開始"
+                f"待機中（最初の QR を表示中）― 受信側のカメラ調整が終わったら Space / Enter で送信開始"
                 f"　　F:{mode}  T:常に手前  Esc:中止",
                 "待機中 ― 受信側の準備ができたら Space / Enter で送信開始",
                 "待機中 ― Space / Enter で開始",

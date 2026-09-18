@@ -94,6 +94,29 @@ class Settings:
         self._q.setValue("receiver/manual_focus", int(v))
 
     @property
+    def exposure(self) -> float | None:
+        """固定した露出（2 の累乗秒の指数。None = 自動露出）。"""
+        text = str(self._q.value("receiver/exposure", "") or "")
+        try:
+            v = float(text)
+        except ValueError:
+            return None
+        return v if -16 <= v <= 4 else None
+
+    @exposure.setter
+    def exposure(self, v: float | None) -> None:
+        self._q.setValue("receiver/exposure", "" if v is None else f"{float(v):g}")
+
+    @property
+    def calibrate_on_start(self) -> bool:
+        """受信開始時に、QR が映ったらピント・露出を自動調整するか。"""
+        return str(self._q.value("receiver/calibrate_on_start", "true")).lower() in ("true", "1")
+
+    @calibrate_on_start.setter
+    def calibrate_on_start(self, v: bool) -> None:
+        self._q.setValue("receiver/calibrate_on_start", bool(v))
+
+    @property
     def enhance(self) -> bool:
         """読み取れないときに画像補正（シャープ化など）をかけて再試行するか。"""
         return str(self._q.value("receiver/enhance", "true")).lower() in ("true", "1")
