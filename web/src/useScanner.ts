@@ -1,11 +1,18 @@
 /**
  * カメラの映像を取り込み、読み取り用のスレッド（Web Worker）に 1 枚ずつ渡す。
  * 読み取り中は次の画像を渡さない（常に最新の画像だけを読む）。
+ *
+ * QR の位置がわかっている間は、その周辺だけを切り出して渡す（全体を読むより軽く、読み取り回数を保てる。
+ * 端末が熱くなって処理が遅くなっても、表示の切り替えに追いつけるように）。見失ったら全体から探し直す。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DecodeRequest, DecodeResponse } from "./decodeWorker";
+import { roiOf } from "./lib/qr";
 
 const MAX_SIDE = 1920; // これより大きい映像は縮小して読む（読み取り時間を抑える）
+const ROI_MISSES = 10; // 周辺だけを読んで、読めない回数がこれだけ続いたら全体から探し直す
+
+type Roi = [number, number, number, number];
 
 export interface Overlay {
   width: number;
@@ -41,6 +48,7 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
   const wakeRef = useRef<WakeLockSentinelLike | null>(null);
   const timerRef = useRef<number | null>(null);
   const errorsRef = useRef(0);
+  const roiRef = useRef<{ roi: Roi; w: number; h: number; misses: number } | null>(null);
   const startRef = useRef<(id?: string | null) => Promise<void>>(async () => undefined);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,17 +72,22 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
     const scale = Math.min(1, MAX_SIDE / Math.max(vw, vh));
     const w = Math.round(vw * scale);
     const h = Math.round(vh * scale);
+    const tracked = roiRef.current;
+    const [x0, y0, x1, y1]: Roi = tracked && tracked.w === w && tracked.h === h ? tracked.roi : [0, 0, w, h];
+    const cw = x1 - x0;
+    const ch = y1 - y0;
     const canvas = (canvasRef.current ??= document.createElement("canvas"));
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
+    if (canvas.width < cw || canvas.height < ch) {
+      canvas.width = Math.max(canvas.width, w);
+      canvas.height = Math.max(canvas.height, h);
     }
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return;
-    ctx.drawImage(video, 0, 0, w, h);
-    const image = ctx.getImageData(0, 0, w, h);
+    // 映像の必要な部分だけを描いて取り出す（取り出しは iPhone では特に重いので、小さいほど良い）
+    ctx.drawImage(video, x0 / scale, y0 / scale, cw / scale, ch / scale, 0, 0, cw, ch);
+    const image = ctx.getImageData(0, 0, cw, ch);
     busyRef.current = true;
-    const req: DecodeRequest = { id: 0, image, enhance: enhanceRef.current };
+    const req: DecodeRequest = { id: 0, image, x0, y0, frameWidth: w, frameHeight: h, enhance: enhanceRef.current };
     worker.postMessage(req, [image.data.buffer]);
   }, []);
 
@@ -93,6 +106,14 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
     worker.onmessage = (ev: MessageEvent<DecodeResponse>) => {
       busyRef.current = false;
       const res = ev.data;
+      // 読む範囲は、実際に読めた QR の位置から決める（QR でない模様を誤って見つけた位置に固定されないように）
+      const found = res.detections.find((d) => d.bytes);
+      const tracked = roiRef.current;
+      if (found) {
+        roiRef.current = { roi: roiOf(found.points, res.width, res.height), w: res.width, h: res.height, misses: 0 };
+      } else if (tracked && ++tracked.misses >= ROI_MISSES) {
+        roiRef.current = null;
+      }
       const boxes = res.detections.map((d) => ({ points: d.points, ok: d.bytes ? onFrameRef.current(d.bytes) : false }));
       if (boxes.length) setOverlay({ width: res.width, height: res.height, boxes, time: performance.now() });
       const c = countRef.current;
@@ -130,6 +151,7 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
     }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    roiRef.current = null;
     void wakeRef.current?.release().catch(() => undefined);
     wakeRef.current = null;
   }, []);

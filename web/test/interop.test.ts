@@ -9,7 +9,7 @@ import { readTar } from "../src/lib/archive";
 import { Assembler, type CompletionResult } from "../src/lib/assembler";
 import { sha256Hex } from "../src/lib/codec";
 import { parseFrame } from "../src/lib/protocol";
-import { RobustReader, decodeImage } from "../src/lib/qr";
+import { RobustReader, crop, decodeImage } from "../src/lib/qr";
 import { FIXTURES, type FixtureCase, b64, fixturesReady, readJson, useLocalWasm } from "./helpers";
 
 const ready = fixturesReady();
@@ -154,6 +154,20 @@ describe.skipIf(!ready)("QR 画像の読み取り（zxing-wasm）", () => {
     for (let i = 0; i < 3 && !got; i++) got = (await reader.read(img)).find((d) => d.bytes)?.bytes ?? null;
     expect(got).toEqual(b64(info.frame));
     expect(reader.rescued).toBeGreaterThan(0);
+  });
+
+  it("QR の周辺だけを渡しても読め、位置は映像全体の座標で返る", async () => {
+    const info = readJson<{ width: number; height: number; frame: string }>("blur.json");
+    const img = new ImageData(new Uint8ClampedArray(readFileSync(join(FIXTURES, "blur.bin"))), info.width, info.height);
+    const full = (await new RobustReader().read(img)).find((d) => d.bytes)!;
+    const [x0, y0] = [12, 20]; // 余白の一部を切り落とす
+    const [x1, y1] = [img.width, img.height];
+    const part = (await new RobustReader().read(crop(img, x0, y0, x1, y1), x0, y0, true)).find((d) => d.bytes)!;
+    expect(part.bytes).toEqual(b64(info.frame));
+    part.points.forEach(([x, y], i) => {
+      expect(Math.abs(x - full.points[i][0])).toBeLessThan(4);
+      expect(Math.abs(y - full.points[i][1])).toBeLessThan(4);
+    });
   });
 });
 

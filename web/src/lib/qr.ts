@@ -105,36 +105,56 @@ export function roiOf(points: [number, number][], w: number, h: number): [number
   ];
 }
 
-/** 素の画像 → 読めなければ位置の周辺をシャープ化して再試行。 */
+const RETRY_WINDOW = 20; // 読み直しが効いているかを判断する回数
+const RETRY_PROBE = 8; // 効いていないときも、この回数に 1 回は試す（ピントが外れてきたときに備えて）
+
+/**
+ * 素の画像 → 読めなければ、QR が見つかった位置の周辺をシャープ化して再試行。
+ *
+ * 読み直しは重い（素の読み取りの 2 倍以上）。QR の切り替わり途中の画像（上下で別の QR が混ざったもの）は
+ * 読み直しても読めないので、最近の読み直しが 1 回も成功していなければ、ときどきしか試さない。
+ */
 export class RobustReader {
-  private roi: [number, number, number, number] | null = null;
-  private miss = 0;
+  private recent: boolean[] = [];
+  private skipped = 0;
   enhance = true;
   rescued = 0;
 
-  async read(img: ImageData): Promise<Detection[]> {
+  /**
+   * img は映像の一部（左上が x0, y0）でもよい。返す位置は映像全体の座標。
+   * focused: img が、直前に読めた QR の周辺を切り出したもの（QR の位置が見つからなくても、全体を読み直す）。
+   */
+  async read(img: ImageData, x0 = 0, y0 = 0, focused = false): Promise<Detection[]> {
     const plain = await decodeImage(img);
-    if (plain.some((d) => d.bytes)) {
-      this.roi = roiOf(plain[0].points, img.width, img.height);
-      this.miss = 0;
-      return plain;
-    }
-    if (plain.length && !this.roi) this.roi = roiOf(plain[0].points, img.width, img.height);
-    if (this.enhance && this.roi) {
-      const [x0, y0, x1, y1] = this.roi;
-      if (x1 - x0 > 16 && y1 - y0 > 16) {
-        const retry = await decodeImage(sharpen(crop(img, x0, y0, x1, y1)));
-        if (retry.some((d) => d.bytes)) {
+    if (!plain.some((d) => d.bytes) && (plain.length || focused) && this.enhance && this.shouldRetry()) {
+      const [rx0, ry0, rx1, ry1] = plain.length ? roiOf(plain[0].points, img.width, img.height) : [0, 0, img.width, img.height];
+      if (rx1 - rx0 > 16 && ry1 - ry0 > 16) {
+        const retry = await decodeImage(sharpen(crop(img, rx0, ry0, rx1, ry1)));
+        const ok = retry.some((d) => d.bytes);
+        this.record(ok);
+        if (ok) {
           this.rescued++;
-          this.miss = 0;
-          return retry.map((d) => ({ ...d, points: d.points.map(([x, y]) => [x + x0, y + y0] as [number, number]) }));
+          return offset(retry, x0 + rx0, y0 + ry0);
         }
       }
     }
-    if (++this.miss >= 10) {
-      this.roi = null;
-      this.miss = 0;
-    }
-    return plain;
+    return offset(plain, x0, y0);
   }
+
+  private shouldRetry(): boolean {
+    if (this.recent.length < RETRY_WINDOW / 2 || this.recent.includes(true)) return true;
+    if (++this.skipped < RETRY_PROBE) return false;
+    this.skipped = 0;
+    return true;
+  }
+
+  private record(ok: boolean): void {
+    this.recent.push(ok);
+    if (this.recent.length > RETRY_WINDOW) this.recent.shift();
+  }
+}
+
+function offset(dets: Detection[], dx: number, dy: number): Detection[] {
+  if (!dx && !dy) return dets;
+  return dets.map((d) => ({ ...d, points: d.points.map(([x, y]) => [x + dx, y + dy] as [number, number]) }));
 }

@@ -8,7 +8,11 @@ const reader = new RobustReader();
 
 export interface DecodeRequest {
   id: number;
-  image: ImageData;
+  image: ImageData; // 映像全体、または QR の周辺だけ（左上が x0, y0）
+  x0: number;
+  y0: number;
+  frameWidth: number;
+  frameHeight: number;
   enhance: boolean;
 }
 
@@ -22,15 +26,16 @@ export interface DecodeResponse {
 }
 
 self.onmessage = async (ev: MessageEvent<DecodeRequest>) => {
-  const { id, image, enhance } = ev.data;
+  const { id, image, x0, y0, frameWidth: width, frameHeight: height, enhance } = ev.data;
   reader.enhance = enhance;
   try {
-    const detections = await reader.read(image);
-    const res: DecodeResponse = { id, width: image.width, height: image.height, detections, rescued: reader.rescued };
+    const focused = image.width < width || image.height < height;
+    const detections = await reader.read(image, x0, y0, focused);
+    const res: DecodeResponse = { id, width, height, detections, rescued: reader.rescued };
     const transfer = detections.flatMap((d) => (d.bytes ? [d.bytes.buffer as ArrayBuffer] : []));
     (self as unknown as DedicatedWorkerGlobalScope).postMessage(res, transfer);
   } catch (e) {
-    const res: DecodeResponse = { id, width: image.width, height: image.height, detections: [], rescued: reader.rescued, error: String(e) };
+    const res: DecodeResponse = { id, width, height, detections: [], rescued: reader.rescued, error: String(e) };
     (self as unknown as DedicatedWorkerGlobalScope).postMessage(res);
   }
 };
