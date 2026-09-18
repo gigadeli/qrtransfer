@@ -110,6 +110,15 @@ class Settings:
         self._q.setValue("sender/qr_fullscreen", bool(v))
 
     @property
+    def qr_wait_for_start(self) -> bool:
+        """QR 表示を待機状態（最初の QR を静止表示）で開き、Space / Enter で送信を始めるか。"""
+        return str(self._q.value("sender/qr_wait_for_start", "true")).lower() in ("true", "1")
+
+    @qr_wait_for_start.setter
+    def qr_wait_for_start(self, v: bool) -> None:
+        self._q.setValue("sender/qr_wait_for_start", bool(v))
+
+    @property
     def qr_always_on_top(self) -> bool:
         return str(self._q.value("sender/qr_always_on_top", "false")).lower() in ("true", "1")
 

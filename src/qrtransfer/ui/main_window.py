@@ -59,6 +59,8 @@ class SettingsDialog(QDialog):
         self.combo_display.setCurrentIndex(0 if settings.qr_fullscreen else 1)
         self.chk_on_top = QCheckBox("常に手前に表示する（ウィンドウモード向け）")
         self.chk_on_top.setChecked(settings.qr_always_on_top)
+        self.chk_wait = QCheckBox("待機状態で開き、Space / Enter で送信を開始する")
+        self.chk_wait.setChecked(settings.qr_wait_for_start)
 
         out_row = QHBoxLayout()
         self.edit_out = QLineEdit(settings.output_dir)
@@ -81,6 +83,7 @@ class SettingsDialog(QDialog):
         form.addRow("誤り訂正レベル (ECC)", self.combo_ecc)
         form.addRow("QR の表示方法", self.combo_display)
         form.addRow("", self.chk_on_top)
+        form.addRow("", self.chk_wait)
         form.addRow(QLabel(f"設定ファイル: {settings._q.fileName()}"))
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -103,6 +106,7 @@ class SettingsDialog(QDialog):
         s.ecc = self.combo_ecc.currentData()
         s.qr_fullscreen = bool(self.combo_display.currentData())
         s.qr_always_on_top = self.chk_on_top.isChecked()
+        s.qr_wait_for_start = self.chk_wait.isChecked()
         if self.edit_out.text().strip():
             s.output_dir = self.edit_out.text().strip()
         s.auto_extract_zip = self.chk_zip.isChecked()
@@ -259,7 +263,8 @@ class MainWindow(QMainWindow):
         use_fullscreen = self.settings.qr_fullscreen
         fs = FullscreenQR(plan, cache, frame_seqs, fps, fullscreen=use_fullscreen,
                           always_on_top=self.settings.qr_always_on_top,
-                          geometry=self.settings.qr_window_geometry or None)
+                          geometry=self.settings.qr_window_geometry or None,
+                          wait_for_start=self.settings.qr_wait_for_start)
         if self.windowIcon() is not None:
             fs.setWindowIcon(self.windowIcon())
         fs.closed.connect(self._fullscreen_closed)

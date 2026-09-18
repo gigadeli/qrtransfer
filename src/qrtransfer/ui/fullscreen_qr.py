@@ -23,8 +23,12 @@ class FullscreenQR(QWidget):
 
     def __init__(self, plan: packer.TransferPlan, cache: qrgen.QRCache, frame_seqs: list[int], fps: int,
                  fullscreen: bool = True, always_on_top: bool = False,
-                 geometry: QByteArray | bytes | None = None, parent=None):
-        """frame_seqs[i] は cache の i 番目のフレームの seq（META は CAROUSEL_META）。"""
+                 geometry: QByteArray | bytes | None = None, wait_for_start: bool = False, parent=None):
+        """frame_seqs[i] は cache の i 番目のフレームの seq（META は CAROUSEL_META）。
+
+        wait_for_start=True のときは、最初の QR（META）を静止表示した「待機中」の状態で開き、
+        Space / Enter キー（またはクリック）で送信を始める。受信側はその間にカメラの位置やピントを合わせられる。
+        """
         super().__init__(parent)
         self.setWindowTitle(f"QRTransfer - 送信中: {plan.meta.get('name', '')}")
         self.setWindowFlag(Qt.WindowType.Window, True)
@@ -42,6 +46,7 @@ class FullscreenQR(QWidget):
         self.data_index = {s: i for i, s in enumerate(frame_seqs) if s != packer.CAROUSEL_META}
         self.fps = max(FPS_MIN, min(FPS_MAX, fps))
         self.paused = False
+        self.waiting = wait_for_start  # 送信開始前の待機中（META を静止表示する）
         self.resend: set[int] | None = None
         self.order = packer.carousel_order(plan.total)
         self.pos = 0
@@ -56,7 +61,19 @@ class FullscreenQR(QWidget):
     # ------------------------------------------------------------------ 制御
     def start(self) -> None:
         self._sync_flags_and_show()
+        if not self.waiting:
+            self.timer.start()
+
+    def begin_sending(self) -> None:
+        """待機を終えて送信（QR の切り替え）を始める。"""
+        if not self.waiting:
+            return
+        self.waiting = False
+        self.paused = False
+        self.pos = 0
+        self.cycle = 1
         self.timer.start()
+        self.update()
 
     def _sync_flags_and_show(self) -> None:
         """「常に手前」フラグを整えてから、現在のモードで表示する。
@@ -174,6 +191,27 @@ class FullscreenQR(QWidget):
                             Qt.TransformationMode.FastTransformation)
         p.drawImage(rect.topLeft(), scaled)
 
+        font = QFont(self.font())
+        text_rect = QRect(0, self.height() - TEXT_AREA, self.width(), TEXT_AREA)
+        if self.waiting:
+            # 待機中は目立つ表示にする（QR には重ならない下部の帯に描く）
+            p.fillRect(text_rect, QColor(255, 243, 205))
+            font.setPointSize(12)
+            font.setBold(True)
+            p.setFont(font)
+            p.setPen(QColor(150, 90, 0))
+            mode = "ウィンドウ" if self.want_fullscreen else "全画面"
+            candidates = (
+                f"待機中（最初の QR を表示中）― 受信側の準備ができたら Space / Enter で送信開始"
+                f"　　F:{mode}  T:常に手前  Esc:中止",
+                "待機中 ― 受信側の準備ができたら Space / Enter で送信開始",
+                "待機中 ― Space / Enter で開始",
+            )
+            fm = p.fontMetrics()
+            text = next((t for t in candidates if fm.horizontalAdvance(t) <= self.width() - 16), candidates[-1])
+            p.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, text)
+            return
+
         total = self.plan.total
         label = "META" if seq == packer.CAROUSEL_META else f"DATA {seq}（0〜{total - 1}）"
         parts = [label, f"周回 {self.cycle}", f"session {self.plan.session_id:08x}", f"{self.fps} fps"]
@@ -185,11 +223,9 @@ class FullscreenQR(QWidget):
             parts.append("一時停止中（←/→ でコマ送り）")
         parts.append("Space:停止  +/-:fps  R:再送  F:" + ("ウィンドウ" if self.want_fullscreen else "全画面")
                      + "  T:常に手前  Esc:終了")
-        font = QFont(self.font())
         font.setPointSize(10)
         p.setFont(font)
         p.setPen(QColor(90, 90, 90))
-        text_rect = QRect(0, self.height() - TEXT_AREA, self.width(), TEXT_AREA)
         p.drawText(text_rect, Qt.AlignmentFlag.AlignCenter, "    ".join(parts))
 
     # ------------------------------------------------------------------ キー操作
@@ -197,6 +233,10 @@ class FullscreenQR(QWidget):
         key = event.key()
         if key == Qt.Key.Key_Escape:
             self.close()
+        elif self.waiting and key in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.begin_sending()
+        elif self.waiting and key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            pass  # 待機中は最初の QR のまま
         elif key == Qt.Key.Key_Space:
             self.paused = not self.paused
             if self.paused:
@@ -223,8 +263,15 @@ class FullscreenQR(QWidget):
         else:
             super().keyPressEvent(event)
 
+    def mouseDoubleClickEvent(self, event) -> None:
+        # 待機中はダブルクリックでも開始できる（シングルクリックはウィンドウを選ぶ操作と紛らわしいので使わない）
+        if self.waiting and event.button() == Qt.MouseButton.LeftButton:
+            self.begin_sending()
+        else:
+            super().mouseDoubleClickEvent(event)
+
     def ask_resend(self) -> None:
-        was_running = not self.paused
+        was_running = not self.paused and not self.waiting
         self.timer.stop()
         self.unsetCursor()
         try:

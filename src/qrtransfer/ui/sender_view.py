@@ -147,8 +147,11 @@ class SenderView(QWidget):
         form.addRow("チャンクサイズ", self.spin_chunk)
         form.addRow("誤り訂正レベル (ECC)", self.combo_ecc)
         form.addRow("表示速度", self.spin_fps)
+        self.chk_wait = QCheckBox("受信側の準備ができるまで待機する（最初の QR を表示したまま、Space / Enter で送信開始）")
+        self.chk_wait.setChecked(settings.qr_wait_for_start)
         form.addRow("QR の表示方法", self.combo_display)
         form.addRow("", self.chk_on_top)
+        form.addRow("開始のタイミング", self.chk_wait)
         self.lbl_estimate = QLabel("")
         self.lbl_estimate.setWordWrap(True)
         form.addRow("見積もり", self.lbl_estimate)
@@ -235,6 +238,7 @@ class SenderView(QWidget):
         self.settings.fps = self.spin_fps.value()
         self.settings.qr_fullscreen = bool(self.combo_display.currentData())
         self.settings.qr_always_on_top = self.chk_on_top.isChecked()
+        self.settings.qr_wait_for_start = self.chk_wait.isChecked()
         self.settings.sync()
 
     def start(self) -> None:

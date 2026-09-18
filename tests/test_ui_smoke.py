@@ -322,3 +322,73 @@ def test_fullscreen_mode_still_default(env, tmp_path, app):
     r = fs.qr_rect()
     assert r.height() <= min(fs.width(), fs.height()) * 0.9
     fs.close()
+
+
+def test_wait_for_start(env, tmp_path, app):
+    """待機状態で開き、最初の QR（META）を静止表示し、Space / Enter / ダブルクリックで送信が始まること。"""
+    from qrtransfer.settings import Settings
+    from qrtransfer.ui.main_window import MainWindow
+
+    assert Settings(tmp_path / "fresh.ini").qr_wait_for_start is True  # 既定は待機する
+
+    f = tmp_path / "wait.bin"
+    f.write_bytes(os.urandom(5000))
+    env.qr_fullscreen = False
+    win = MainWindow(env)
+    win.show_sender()
+    assert win.sender.chk_wait.isChecked()
+    plan, cache, seqs = prepare(win.sender, [f])
+    receiver = win.show_receiver()
+
+    win.start_fullscreen(plan, cache, seqs, 15)
+    fs = win.fullscreen
+    fs.resize(800, 860)
+    app.processEvents()
+    assert fs.waiting and not fs.timer.isActive()
+    assert fs.current_seq() == packer.CAROUSEL_META
+
+    # 待機中は時間が経っても QR が進まない
+    loop = QEventLoop()
+    QTimer.singleShot(300, loop.quit)
+    loop.exec()
+    assert fs.pos == 0 and fs.waiting
+
+    # 待機中の QR（META）は読めるので、受信側はファイル名を確認しながらカメラを調整できる
+    process_image(camera_like(qimage_to_bgr(fs.grab().toImage())), receiver.assembler)
+    snap = receiver.assembler.snapshot()
+    assert snap.meta is not None and snap.meta["name"] == "wait.bin" and snap.received == 0
+
+    # 待機中の ←/→ や fps 変更では開始しない
+    QTest.keyClick(fs, Qt.Key.Key_Right)
+    QTest.keyClick(fs, Qt.Key.Key_Plus)
+    assert fs.waiting and fs.pos == 0 and not fs.timer.isActive()
+
+    # Enter で開始
+    QTest.keyClick(fs, Qt.Key.Key_Return)
+    assert not fs.waiting and fs.timer.isActive() and not fs.paused
+    # 開始後の Space は従来どおり一時停止
+    QTest.keyClick(fs, Qt.Key.Key_Space)
+    assert fs.paused and not fs.timer.isActive()
+    fs.close()
+
+    # Space とダブルクリックでも開始できる
+    win.start_fullscreen(plan, cache, seqs, 15)
+    fs = win.fullscreen
+    QTest.keyClick(fs, Qt.Key.Key_Space)
+    assert not fs.waiting and not fs.paused and fs.timer.isActive()
+    fs.close()
+    win.start_fullscreen(plan, cache, seqs, 15)
+    fs = win.fullscreen
+    QTest.mouseDClick(fs, Qt.MouseButton.LeftButton)
+    assert not fs.waiting and fs.timer.isActive()
+    fs.close()
+
+    # 待機しない設定にすると、すぐに始まる
+    win.sender.chk_wait.setChecked(False)
+    win.sender.save_params()
+    assert Settings(tmp_path / "settings.ini").qr_wait_for_start is False
+    win.start_fullscreen(plan, cache, seqs, 15)
+    fs = win.fullscreen
+    assert not fs.waiting and fs.timer.isActive()
+    fs.close()
+    win.close()
