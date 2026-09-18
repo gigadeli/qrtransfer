@@ -150,6 +150,9 @@ def test_send_with_repair_qr(env, tmp_path, app):
     win.sender.combo_method.setCurrentIndex(1)
     assert not win.sender.spin_repair.isEnabled() and win.sender.repair_ratio() == 0
     win.sender.combo_method.setCurrentIndex(0)
+    # 20 チャンク中 7 つを取りこぼす。修復用 QR（式はランダム）が 50%（10 枚）だと、7 つを解ける組にならないことが
+    # 1 割ほどあり、1 周では終わらない（次の周の DATA で埋まる）。1 周で終わることを確かめたいので 100% にする
+    win.sender.spin_repair.setValue(100)
     plan, cache, seqs = prepare(win.sender, [src], win.sender.repair_ratio())
     assert "修復用" in win.sender.lbl_estimate.text()
     repairs = [s for s in seqs if packer.repair_index(s) is not None]
