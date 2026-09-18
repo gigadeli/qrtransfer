@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Assembler, type CompletionResult, type ReceivedFile, type Snapshot } from "./lib/assembler";
 import { hex32, parseFrame } from "./lib/protocol";
 import { ChunkMap } from "./components/ChunkMap";
+import { Preview } from "./components/Preview";
 import { useScanner } from "./useScanner";
 
 const OVERLAY_TTL_MS = 400;
@@ -204,6 +205,7 @@ export default function App() {
                   名前が重なるため変更した項目: {result.file.renamed.map((r) => `${r.name} → ${r.to}`).slice(0, 10).join(", ")}
                 </p>
               )}
+              <Preview file={result.file} />
               <div className="actions">
                 {shareFile && (
                   <button className="primary" onClick={() => void navigator.share({ files: [shareFile] }).catch(() => undefined)}>

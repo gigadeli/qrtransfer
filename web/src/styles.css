@@ -411,3 +411,43 @@ dd {
   font-weight: 700;
   overflow-wrap: anywhere;
 }
+
+.preview {
+  margin: 10px 0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--preview-bg);
+  display: flex;
+  justify-content: center;
+}
+
+.preview img,
+.preview video {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+}
+
+.preview audio {
+  width: 100%;
+  display: block;
+}
+
+.preview:has(audio) {
+  background: none;
+}
+
+.preview.text {
+  display: block;
+  margin: 10px 0;
+  padding: 10px 12px;
+  max-height: 50vh;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
