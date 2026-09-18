@@ -27,7 +27,8 @@ describe("protocol", () => {
     bad[17] ^= 1;
     expect(parseFrame(bad)).toBeNull();
     expect(parseFrame(frame(1, 1, 5, 5, new Uint8Array([1])))).toBeNull(); // seq >= total
-    expect(parseFrame(frame(2, 1, 0, 5, new Uint8Array([1])))).toBeNull(); // 未知の種類
+    expect(parseFrame(frame(3, 1, 0, 5, new Uint8Array([1])))).toBeNull(); // 未知の種類
+    expect(parseFrame(frame(2, 1, 9, 5, new Uint8Array([1])))).toMatchObject({ type: 2, seq: 9 }); // 修復用（番号は総数を超えてよい）
     expect(parseFrame(new Uint8Array(10))).toBeNull();
   });
 

@@ -4,12 +4,14 @@
  * - 最初に届いたフレームのセッションを受信する。別のセッションのフレームは「別の転送」として知らせ、
  *   switchToConflict() で切り替える。完了後に届いた新しいセッションはそのまま受信を始める。
  * - META が届くまでは、最終チャンク以外の長さから chunk_size を推定して長さを検証する。
+ * - 修復用フレーム（REPAIR）が届いたら、欠けたチャンクを計算で求める（META が届いてから）。
  * - 全チャンクと META がそろったら、SHA-256（結合後と伸長後）を照合し、保存用のファイルを作る。
  */
 import { TooLargeError, decompress, sha256Hex } from "./codec";
 import { makeZip, readTar, sanitizeFilename } from "./archive";
 import { type Meta, parseMeta } from "./meta";
-import { type Frame, TYPE_META } from "./protocol";
+import { type Frame, TYPE_META, TYPE_REPAIR } from "./protocol";
+import { RepairDecoder, TOTAL_LIMIT as REPAIR_TOTAL_LIMIT, repairIndices } from "./repair";
 
 export type Status = "new" | "meta" | "dup" | "conflict" | "finished" | "invalid" | "too_large";
 
@@ -84,6 +86,7 @@ class Session {
   times: number[] = [];
   finishing = false;
   finished = false;
+  decoder: RepairDecoder | null = null;
 
   constructor(
     readonly sessionId: number,
@@ -158,7 +161,10 @@ export class Assembler {
     }
     if (s.finished || s.finishing) return "finished";
     if (frame.total !== s.total) return "invalid";
-    const status = frame.type === TYPE_META ? this.handleMeta(s, frame) : this.handleData(s, frame);
+    const status =
+      frame.type === TYPE_META ? this.handleMeta(s, frame)
+        : frame.type === TYPE_REPAIR ? this.handleRepair(s, frame)
+          : this.handleData(s, frame);
     if (status === "new" || status === "meta") {
       this.maybeComplete(s);
       this.onChange?.();
@@ -213,13 +219,34 @@ export class Assembler {
       s.chunkSize = payload.length;
     }
     if (!this.lengthOk(s, seq, payload.length)) return "invalid";
-    s.chunks[seq] = payload;
+    this.store(s, seq, payload);
+    if (s.decoder) for (const [q, d] of s.decoder.addKnown(seq, payload)) this.store(s, q, d);
+    return "new";
+  }
+
+  private store(s: Session, seq: number, data: Uint8Array): void {
+    if (seq === s.total - 1 && s.meta) {
+      // 修復で解けた最終チャンクは、埋め草（0）を除いた本来の長さにする
+      data = data.subarray(0, s.meta.payload_size - (s.total - 1) * s.meta.chunk_size);
+    }
+    s.chunks[seq] = data;
     s.bitmap[seq] = 1;
     s.received++;
     const now = performance.now();
     s.times.push(now);
     while (s.times.length && now - s.times[0] > RATE_WINDOW_MS) s.times.shift();
-    return "new";
+  }
+
+  /** 修復用フレーム: META が届いてから使う（チャンクの大きさが確定している必要がある）。 */
+  private handleRepair(s: Session, frame: Frame): Status {
+    if (!s.meta || s.total >= REPAIR_TOTAL_LIMIT || s.received === s.total) return "dup";
+    const cs = s.meta.chunk_size;
+    if (frame.payload.length !== cs) return "invalid";
+    s.decoder ??= new RepairDecoder(s.total, cs);
+    const indices = repairIndices(s.sessionId, frame.seq, s.total);
+    const solved = s.decoder.addRepair(indices, frame.payload, (i) => s.chunks[i]);
+    for (const [q, d] of solved) this.store(s, q, d);
+    return solved.length ? "new" : "dup";
   }
 
   private maybeComplete(s: Session): void {
@@ -229,6 +256,7 @@ export class Assembler {
       s.finishing = false;
       s.finished = true;
       s.chunks = []; // メモリを解放（結果のファイルは result に残る）
+      s.decoder = null;
       this.finishedIds.add(s.sessionId);
       if (this.session === s) this.result = r;
       this.onComplete?.(r);

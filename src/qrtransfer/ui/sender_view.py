@@ -12,8 +12,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDia
                                QHBoxLayout, QLabel, QListWidget, QMessageBox, QProgressDialog, QPushButton,
                                QSpinBox, QVBoxLayout, QWidget)
 
-from .. import packer, protocol, qrgen
-from ..settings import FPS_MAX, FPS_MIN, Settings
+from .. import packer, protocol, qrgen, repair
+from ..settings import FPS_MAX, FPS_MIN, REPAIR_RATIO_MIN, Settings
 
 WARN_SIZE = 10 * 1024 * 1024
 
@@ -41,11 +41,13 @@ class PrepareWorker(QThread):
     finished_ok = Signal(object, object, object)  # plan, cache, frame_seqs
     failed = Signal(str)
 
-    def __init__(self, paths: list[str], chunk_size: int, ecc: str, parent=None):
+    def __init__(self, paths: list[str], chunk_size: int, ecc: str, repair_ratio: int = 0, parent=None):
+        """repair_ratio: 修復用 QR の枚数（全チャンク数に対する %）。0 なら作らない（従来方式）。"""
         super().__init__(parent)
         self.paths = paths
         self.chunk_size = chunk_size
         self.ecc = ecc
+        self.repair_ratio = repair_ratio
         self.cancel = threading.Event()
 
     def run(self) -> None:
@@ -62,6 +64,13 @@ class PrepareWorker(QThread):
             cap = qrgen.capacity(version, self.ecc)
             frames = [plan.meta_frame(cap)] + [plan.data_frame(i) for i in range(plan.total)]
             frame_seqs = [packer.CAROUSEL_META] + list(range(plan.total))
+            repairs = repair.repair_count(plan.total, self.repair_ratio)
+            if repairs:
+                self.progress.emit(f"修復用 QR を作っています（{repairs} 枚）…", 0, 0)
+                frames += plan.repair_frames(repairs)
+                frame_seqs += [packer.carousel_repair(r) for r in range(repairs)]
+                if self.cancel.is_set():
+                    return
             label = f"QR コードを生成しています（バージョン {version}、{len(frames)} 枚）…"
             cache = qrgen.generate_cache(frames, version, self.ecc,
                                          progress=lambda d, t: self.progress.emit(label, d, t),
@@ -154,9 +163,23 @@ class SenderView(QWidget):
         self.combo_display.setCurrentIndex(0 if settings.qr_fullscreen else 1)
         self.chk_on_top = QCheckBox("常に手前に表示する（ウィンドウモード向け）")
         self.chk_on_top.setChecked(settings.qr_always_on_top)
+        self.combo_method = QComboBox()
+        self.combo_method.addItem("修復用 QR を混ぜる（欠落番号の入力が不要）", True)
+        self.combo_method.addItem("従来（欠落番号を入力して再送）", False)
+        self.combo_method.setCurrentIndex(0 if settings.use_repair else 1)
+        self.spin_repair = QSpinBox()
+        self.spin_repair.setRange(REPAIR_RATIO_MIN, repair.RATIO_MAX)
+        self.spin_repair.setSingleStep(10)
+        self.spin_repair.setSuffix(" %")
+        self.spin_repair.setValue(settings.repair_ratio)
+        self.spin_repair.setToolTip("全チャンク数に対する修復用 QR の枚数")
+        method_row = QHBoxLayout()
+        method_row.addWidget(self.combo_method, 1)
+        method_row.addWidget(self.spin_repair)
         form.addRow("チャンクサイズ", self.spin_chunk)
         form.addRow("誤り訂正レベル (ECC)", self.combo_ecc)
         form.addRow("表示速度", self.spin_fps)
+        form.addRow("送信方式", method_row)
         self.chk_wait = QCheckBox("受信側の準備ができるまで待機する（最初の QR を表示したまま、Space / Enter で送信開始）")
         self.chk_wait.setChecked(settings.qr_wait_for_start)
         form.addRow("QR の表示方法", self.combo_display)
@@ -177,6 +200,8 @@ class SenderView(QWidget):
         self.spin_chunk.valueChanged.connect(self.update_estimate)
         self.combo_ecc.currentIndexChanged.connect(self.update_estimate)
         self.spin_fps.valueChanged.connect(self.update_estimate)
+        self.combo_method.currentIndexChanged.connect(self.update_estimate)
+        self.spin_repair.valueChanged.connect(self.update_estimate)
         self.update_estimate()
 
     # ------------------------------------------------------------------ 入力
@@ -227,7 +252,8 @@ class SenderView(QWidget):
         fps = self.spin_fps.value()
         size = self.input_size
         total = packer.total_chunks(size, chunk)
-        frames = packer.estimate_frames_per_cycle(total)
+        repairs = repair.repair_count(total, self.repair_ratio())
+        frames = packer.estimate_frames_per_cycle(total, repairs)
         max_frame = protocol.OVERHEAD + min(chunk, size) if size else protocol.OVERHEAD
         try:
             # META は JSON（約 300 バイト＋ファイル名）なので、その分も考慮する
@@ -236,11 +262,20 @@ class SenderView(QWidget):
         except qrgen.QRGenError as e:
             return f"⚠ {e}"
         cycle = frames / fps
+        if repairs:
+            # 修復用 QR があれば、DATA と修復用を合わせて全チャンク数と少しを受け取った時点で完了する
+            first = packer.estimate_frames_per_cycle(total) / fps
+            return (f"{total} チャンク＋修復用 {repairs} 枚、1 周 {frames} 枚 ≈ {human_time(cycle)}、{vtext}、"
+                    f"取りこぼしなしなら約 {human_time(first)} で完了（圧縮前）")
         rate = chunk * fps * total / max(frames, 1) if total else 0
         return (f"{total} チャンク、1 周 {frames} 枚 ≈ {human_time(cycle)}、{vtext}、"
                 f"実効 約 {human_size(rate)}/秒（圧縮前・取りこぼしなしの場合）")
 
+    def repair_ratio(self) -> int:
+        return self.spin_repair.value() if self.combo_method.currentData() else 0
+
     def update_estimate(self) -> None:
+        self.spin_repair.setEnabled(bool(self.combo_method.currentData()))
         self.lbl_estimate.setText(self.estimate_text())
 
     # ------------------------------------------------------------------ 送信
@@ -251,6 +286,8 @@ class SenderView(QWidget):
         self.settings.qr_fullscreen = bool(self.combo_display.currentData())
         self.settings.qr_always_on_top = self.chk_on_top.isChecked()
         self.settings.qr_wait_for_start = self.chk_wait.isChecked()
+        self.settings.use_repair = bool(self.combo_method.currentData())
+        self.settings.repair_ratio = self.spin_repair.value()
         self.settings.sync()
 
     def start(self) -> None:
@@ -263,7 +300,8 @@ class SenderView(QWidget):
             return
         self.save_params()
         self.btn_start.setEnabled(False)
-        self.worker = PrepareWorker(self.paths, self.spin_chunk.value(), self.combo_ecc.currentData(), self)
+        self.worker = PrepareWorker(self.paths, self.spin_chunk.value(), self.combo_ecc.currentData(),
+                                    self.repair_ratio(), self)
         dlg = QProgressDialog("準備しています…", "キャンセル", 0, 0, self)
         dlg.setWindowTitle("送信の準備")
         dlg.setWindowModality(Qt.WindowModality.WindowModal)

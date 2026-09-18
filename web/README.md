@@ -4,6 +4,7 @@ iPhone / Android のブラウザで、パソコンの QRTransfer が表示する
 公開先: https://gigadeli.github.io/qrtransfer/
 
 - デスクトップ版と同じプロトコル（`src/qrtransfer/protocol.py`）・同じ照合（SHA-256）で受信します。
+- 送信側が「修復用 QR を混ぜる」方式なら、取りこぼしがあっても読み続けるだけで完了します（欠落番号の入力は不要）。
 - フォルダ（bundle）は ZIP にまとめ直して保存します（iPhone の「ファイル」アプリでタップすると展開できます）。
 - QR の読み取りは zxing-cpp の WebAssembly 版（デスクトップ版と同じ部品）。読めないときは QR の周辺をシャープ化して読み直します。
 - 受信中のデータはブラウザのメモリ上にだけ持ちます（ページを閉じると消えます）。受信できるのは 100MB まで（転送量・伸長後とも）で、超える転送は受け付けずにお知らせを出します。実用的には数 MB までが目安です。
@@ -34,6 +35,7 @@ GitHub Pages に公開されたページで確かめるのが簡単です。
 | `src/lib/protocol.ts` | フレームの解析、欠落番号の表記 |
 | `src/lib/meta.ts` | META（ファイル名・サイズ・ハッシュなど）の検証 |
 | `src/lib/assembler.ts` | フレームの組み立て、別の転送の検出、完了時の照合と保存用ファイルの作成 |
+| `src/lib/repair.ts` | 修復用フレームの復元（Python 版 `repair.py` と同じ決まり） |
 | `src/lib/codec.ts` | 伸長（zlib / xz）と SHA-256 |
 | `src/lib/archive.ts` | tar の読み取り（危険なパスは除外）と ZIP の作成 |
 | `src/lib/qr.ts` | QR の読み取り（zxing-wasm）と画像補正 |

@@ -8,10 +8,11 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings, QStandardPaths
 
-from . import packer, qrgen
+from . import packer, qrgen, repair
 
 RESOLUTIONS = [(1280, 720), (1920, 1080)]
 FPS_MIN, FPS_MAX, FPS_DEFAULT = 1, 15, 6
+REPAIR_RATIO_MIN = 10
 
 
 def settings_path() -> Path:
@@ -141,6 +142,24 @@ class Settings:
     @chunk_size.setter
     def chunk_size(self, v: int) -> None:
         self._q.setValue("sender/chunk_size", int(v))
+
+    @property
+    def use_repair(self) -> bool:
+        """修復用 QR を混ぜて送るか（False なら従来方式: 欠落番号を入力して再送）。"""
+        return str(self._q.value("sender/use_repair", "true")).lower() in ("true", "1")
+
+    @use_repair.setter
+    def use_repair(self, v: bool) -> None:
+        self._q.setValue("sender/use_repair", bool(v))
+
+    @property
+    def repair_ratio(self) -> int:
+        """修復用 QR の枚数（全チャンク数に対する %）。"""
+        return self._int("sender/repair_ratio", repair.RATIO_DEFAULT, REPAIR_RATIO_MIN, repair.RATIO_MAX)
+
+    @repair_ratio.setter
+    def repair_ratio(self, v: int) -> None:
+        self._q.setValue("sender/repair_ratio", int(v))
 
     @property
     def qr_fullscreen(self) -> bool:

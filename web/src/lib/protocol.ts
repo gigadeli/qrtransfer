@@ -4,11 +4,13 @@
  * フレーム（ビッグエンディアン）:
  *   magic(2) "QZ" | version(1) | type(1) | session_id(4) | seq(4) | total(4) | payload(N) | crc32(4)
  * CRC32 はオフセット 0 から payload 末尾までを対象とする。
+ * type: 0=META、1=DATA、2=REPAIR（修復用。seq は修復用フレームの番号。repair.ts を参照）
  */
 import { crc32 } from "./crc32";
 
 export const TYPE_META = 0;
 export const TYPE_DATA = 1;
+export const TYPE_REPAIR = 2;
 export const HEADER_SIZE = 16;
 export const CRC_SIZE = 4;
 export const OVERHEAD = HEADER_SIZE + CRC_SIZE;
@@ -31,7 +33,7 @@ export function parseFrame(data: Uint8Array | null | undefined): Frame | null {
   const crc = view.getUint32(data.length - CRC_SIZE);
   if (crc32(data, 0, data.length - CRC_SIZE) !== crc) return null;
   const type = data[3];
-  if (type !== TYPE_META && type !== TYPE_DATA) return null;
+  if (type !== TYPE_META && type !== TYPE_DATA && type !== TYPE_REPAIR) return null;
   const sessionId = view.getUint32(4);
   const seq = view.getUint32(8);
   const total = view.getUint32(12);

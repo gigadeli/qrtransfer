@@ -54,10 +54,10 @@ def camera_like(bgr: np.ndarray) -> np.ndarray:
     return np.clip(noisy, 0, 255).astype(np.uint8)
 
 
-def prepare(sender, paths):
+def prepare(sender, paths, repair_ratio: int = 0):
     from qrtransfer.ui.sender_view import PrepareWorker
     sender.set_paths([str(p) for p in paths])
-    w = PrepareWorker(sender.paths, sender.spin_chunk.value(), sender.combo_ecc.currentData())
+    w = PrepareWorker(sender.paths, sender.spin_chunk.value(), sender.combo_ecc.currentData(), repair_ratio)
     got = {}
     w.finished_ok.connect(lambda plan, cache, seqs: got.update(plan=plan, cache=cache, seqs=seqs))
     w.failed.connect(lambda m: got.update(error=m))
@@ -131,6 +131,55 @@ def test_send_screen_to_receiver(env, tmp_path, app):
     result = receiver.last_result
     got, dirs = read_tree(result.path)
     assert got == files and "empty" in dirs
+    fs.close()
+    win.close()
+
+
+def test_send_with_repair_qr(env, tmp_path, app):
+    """修復用 QR を混ぜた送信: DATA を 3 分の 1 取りこぼしても、再送の指示なしに 1 周のうちに完了する。"""
+    from qrtransfer.ui.fullscreen_qr import FullscreenQR
+    from qrtransfer.ui.main_window import MainWindow
+    src = tmp_path / "src" / "修復.bin"
+    src.parent.mkdir()
+    content = os.urandom(6000)
+    src.write_bytes(content)
+
+    win = MainWindow(env)
+    win.show_sender()
+    assert win.sender.combo_method.currentData() is True  # 既定は修復用 QR を混ぜる
+    win.sender.combo_method.setCurrentIndex(1)
+    assert not win.sender.spin_repair.isEnabled() and win.sender.repair_ratio() == 0
+    win.sender.combo_method.setCurrentIndex(0)
+    plan, cache, seqs = prepare(win.sender, [src], win.sender.repair_ratio())
+    assert "修復用" in win.sender.lbl_estimate.text()
+    repairs = [s for s in seqs if packer.repair_index(s) is not None]
+    assert len(repairs) == packer.repair.repair_count(plan.total, win.sender.spin_repair.value())
+    receiver = win.show_receiver()
+
+    fs = FullscreenQR(plan, cache, seqs, fps=15)
+    fs.resize(1600, 900)
+    fs.show()
+    app.processEvents()
+    assert fs.repairs == len(repairs)
+    shown = 0
+    for _ in range(len(fs.order)):
+        seq = fs.current_seq()
+        if seq == packer.CAROUSEL_META or packer.repair_index(seq) is not None or seq % 3 != 1:
+            _, statuses = process_image(camera_like(qimage_to_bgr(fs.grab().toImage())), receiver.assembler)
+            shown += 1
+            if "complete" in statuses:
+                break
+        fs.advance()
+    app.processEvents()
+    assert shown < len(fs.order)  # 1 周を待たずに完了した
+    result = receiver.last_result
+    assert result is not None and result.ok, result and result.message
+    assert result.path.read_bytes() == content
+    # 再送（番号指定）はこの方式でも使える
+    fs.set_resend({0, 1})
+    assert [s for s in fs.order if s != packer.CAROUSEL_META] == [0, 1]
+    fs.set_resend(None)
+    assert len(fs.order) == len(packer.carousel_order(plan.total, repairs=len(repairs)))
     fs.close()
     win.close()
 

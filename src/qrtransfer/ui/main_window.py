@@ -12,9 +12,9 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
                                QMainWindow, QMessageBox, QPushButton, QSpinBox, QStackedWidget, QToolButton,
                                QVBoxLayout, QWidget)
 
-from .. import APP_NAME, __version__, packer, qrgen
+from .. import APP_NAME, __version__, packer, qrgen, repair
 from ..assembler import Assembler, IncompleteSession
-from ..settings import FPS_MAX, FPS_MIN, RESOLUTIONS, Settings
+from ..settings import FPS_MAX, FPS_MIN, REPAIR_RATIO_MIN, RESOLUTIONS, Settings
 from .fullscreen_qr import FullscreenQR
 from .receiver_view import ReceiverView
 from . import theme
@@ -71,6 +71,18 @@ class SettingsDialog(QDialog):
         self.chk_on_top.setChecked(settings.qr_always_on_top)
         self.chk_wait = QCheckBox("待機状態で開き、Space / Enter で送信を開始する")
         self.chk_wait.setChecked(settings.qr_wait_for_start)
+        self.combo_method = QComboBox()
+        self.combo_method.addItem("修復用 QR を混ぜる", True)
+        self.combo_method.addItem("従来（欠落番号を入力して再送）", False)
+        self.combo_method.setCurrentIndex(0 if settings.use_repair else 1)
+        self.spin_repair = QSpinBox()
+        self.spin_repair.setRange(REPAIR_RATIO_MIN, repair.RATIO_MAX)
+        self.spin_repair.setSingleStep(10)
+        self.spin_repair.setSuffix(" %")
+        self.spin_repair.setValue(settings.repair_ratio)
+        self.spin_repair.setEnabled(settings.use_repair)
+        self.combo_method.currentIndexChanged.connect(
+            lambda: self.spin_repair.setEnabled(bool(self.combo_method.currentData())))
 
         out_row = QHBoxLayout()
         self.edit_out = QLineEdit(settings.output_dir)
@@ -91,6 +103,8 @@ class SettingsDialog(QDialog):
         form.addRow("表示速度 (fps)", self.spin_fps)
         form.addRow("チャンクサイズ (バイト)", self.spin_chunk)
         form.addRow("誤り訂正レベル (ECC)", self.combo_ecc)
+        form.addRow("送信方式", self.combo_method)
+        form.addRow("修復用 QR の量", self.spin_repair)
         form.addRow("QR の表示方法", self.combo_display)
         form.addRow("", self.chk_on_top)
         form.addRow("", self.chk_wait)
@@ -121,6 +135,8 @@ class SettingsDialog(QDialog):
         s.qr_fullscreen = bool(self.combo_display.currentData())
         s.qr_always_on_top = self.chk_on_top.isChecked()
         s.qr_wait_for_start = self.chk_wait.isChecked()
+        s.use_repair = bool(self.combo_method.currentData())
+        s.repair_ratio = self.spin_repair.value()
         if self.edit_out.text().strip():
             s.output_dir = self.edit_out.text().strip()
         s.auto_extract_zip = self.chk_zip.isChecked()

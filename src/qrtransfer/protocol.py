@@ -3,6 +3,10 @@
 フレーム形式（ビッグエンディアン）:
     magic(2) "QZ" | version(1) | type(1) | session_id(4) | seq(4) | total(4) | payload(N) | crc32(4)
 CRC32 はオフセット 0 から payload 末尾までを対象とする。
+
+type: 0=META、1=DATA（seq 番目のチャンク）、2=REPAIR（修復用。seq は修復用フレームの番号で、
+payload は複数のチャンクの XOR。どのチャンクを重ねたかは repair.py の決まりで session_id と seq から求まる）。
+REPAIR を知らない古い受信側は、種類が不明なフレームとして読み飛ばす（DATA だけで従来どおり受信できる）。
 """
 
 from __future__ import annotations
@@ -19,6 +23,8 @@ SUPPORTED_VERSIONS = frozenset({1})
 
 TYPE_META = 0
 TYPE_DATA = 1
+TYPE_REPAIR = 2
+FRAME_TYPES = (TYPE_META, TYPE_DATA, TYPE_REPAIR)
 
 HEADER = struct.Struct(">2sBBIII")
 HEADER_SIZE = HEADER.size  # 16
@@ -47,9 +53,13 @@ class Frame:
     def is_data(self) -> bool:
         return self.type == TYPE_DATA
 
+    @property
+    def is_repair(self) -> bool:
+        return self.type == TYPE_REPAIR
+
 
 def build_frame(ftype: int, session_id: int, seq: int, total: int, payload: bytes) -> bytes:
-    if ftype not in (TYPE_META, TYPE_DATA):
+    if ftype not in FRAME_TYPES:
         raise ValueError(f"unknown frame type: {ftype}")
     for name, value in (("session_id", session_id), ("seq", seq), ("total", total)):
         if not 0 <= value <= _U32_MAX:
@@ -66,6 +76,10 @@ def build_data_frame(session_id: int, seq: int, total: int, payload: bytes) -> b
     return build_frame(TYPE_DATA, session_id, seq, total, payload)
 
 
+def build_repair_frame(session_id: int, index: int, total: int, payload: bytes) -> bytes:
+    return build_frame(TYPE_REPAIR, session_id, index, total, payload)
+
+
 def parse_frame(data: bytes | bytearray | memoryview | None) -> Frame | None:
     """フレームを解析する。不正なフレームは例外を出さずに None を返す（黙って破棄）。"""
     if data is None:
@@ -79,7 +93,7 @@ def parse_frame(data: bytes | bytearray | memoryview | None) -> Frame | None:
     (crc,) = CRC.unpack_from(data, len(data) - CRC_SIZE)
     if zlib.crc32(data[:-CRC_SIZE]) & _U32_MAX != crc:
         return None
-    if ftype not in (TYPE_META, TYPE_DATA):
+    if ftype not in FRAME_TYPES:
         return None
     if ftype == TYPE_DATA and seq >= total:
         return None

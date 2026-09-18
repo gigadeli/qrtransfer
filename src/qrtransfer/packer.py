@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
 from . import __version__
-from . import protocol
+from . import protocol, repair
 
 MODE_FILE = "file"
 MODE_BUNDLE = "bundle"
@@ -38,6 +38,16 @@ CHUNK_SIZE_MAX = 2000
 META_NAME_MIN_BYTES = 64  # META が収まるバージョンを決めるときに確保するファイル名の長さ
 
 CAROUSEL_META = -1  # carousel_order の中で META を表す値
+CAROUSEL_REPAIR = -2  # carousel_order の中で r 番目の修復用フレームは CAROUSEL_REPAIR - r
+
+
+def carousel_repair(r: int) -> int:
+    return CAROUSEL_REPAIR - r
+
+
+def repair_index(entry: int) -> int | None:
+    """carousel_order の値が修復用フレームなら、その番号。"""
+    return CAROUSEL_REPAIR - entry if entry <= CAROUSEL_REPAIR else None
 
 ProgressCB = Callable[[str, float], None]
 
@@ -334,6 +344,10 @@ class TransferPlan:
     def data_frame(self, seq: int) -> bytes:
         return protocol.build_data_frame(self.session_id, seq, self.total, self.chunks[seq])
 
+    def repair_frames(self, count: int) -> list[bytes]:
+        payloads = repair.encode(self.chunks, self.chunk_size, self.session_id, count)
+        return [protocol.build_repair_frame(self.session_id, r, self.total, p) for r, p in enumerate(payloads)]
+
     def meta_frame(self, max_frame_size: int | None = None) -> bytes:
         max_payload = None if max_frame_size is None else max_frame_size - protocol.OVERHEAD
         return protocol.build_meta_frame(self.session_id, self.total, meta_payload(self.meta, max_payload))
@@ -375,9 +389,14 @@ def make_plan(paths: Sequence[str | os.PathLike], chunk_size: int = CHUNK_SIZE_D
 
 
 def carousel_order(total: int, seqs: Iterable[int] | None = None,
-                   meta_interval: int = protocol.META_INTERVAL) -> list[int]:
-    """1 周分の表示順。META は CAROUSEL_META(-1)。先頭は必ず META、DATA meta_interval 枚ごとに META。"""
+                   meta_interval: int = protocol.META_INTERVAL, repairs: int = 0) -> list[int]:
+    """1 周分の表示順。META は CAROUSEL_META(-1)。先頭は必ず META、DATA meta_interval 枚ごとに META。
+
+    repairs > 0 のときは、DATA のあとに修復用フレーム（carousel_repair(r)）を repairs 枚続ける（seqs 指定の再送では付けない）。
+    """
     data = list(range(total)) if seqs is None else sorted({s for s in seqs if 0 <= s < total})
+    if seqs is None:
+        data += [carousel_repair(r) for r in range(repairs)]
     order: list[int] = []
     for i, s in enumerate(data):
         if i % meta_interval == 0:
@@ -388,5 +407,5 @@ def carousel_order(total: int, seqs: Iterable[int] | None = None,
     return order
 
 
-def estimate_frames_per_cycle(total: int) -> int:
-    return total + max(1, math.ceil(total / protocol.META_INTERVAL))
+def estimate_frames_per_cycle(total: int, repairs: int = 0) -> int:
+    return total + repairs + max(1, math.ceil((total + repairs) / protocol.META_INTERVAL))

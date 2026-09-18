@@ -48,7 +48,8 @@ class FullscreenQR(QWidget):
         self.paused = False
         self.waiting = wait_for_start  # 送信開始前の待機中（META を静止表示する）
         self.resend: set[int] | None = None
-        self.order = packer.carousel_order(plan.total)
+        self.repairs = sum(1 for s in frame_seqs if packer.repair_index(s) is not None)
+        self.order = packer.carousel_order(plan.total, repairs=self.repairs)
         self.pos = 0
         self.cycle = 1
         self._image_cache: dict[int, QImage] = {}
@@ -148,7 +149,7 @@ class FullscreenQR(QWidget):
 
     def set_resend(self, seqs: set[int] | None) -> None:
         self.resend = seqs if seqs else None
-        self.order = packer.carousel_order(self.plan.total, self.resend)
+        self.order = packer.carousel_order(self.plan.total, self.resend, repairs=self.repairs)
         self.pos = 0
         self.cycle = 1
         self.update()
@@ -213,7 +214,13 @@ class FullscreenQR(QWidget):
             return
 
         total = self.plan.total
-        label = "META" if seq == packer.CAROUSEL_META else f"DATA {seq}（0〜{total - 1}）"
+        r = packer.repair_index(seq)
+        if seq == packer.CAROUSEL_META:
+            label = "META"
+        elif r is not None:
+            label = f"修復 {r}（0〜{self.repairs - 1}）"
+        else:
+            label = f"DATA {seq}（0〜{total - 1}）"
         parts = [label, f"周回 {self.cycle}", f"session {self.plan.session_id:08x}", f"{self.fps} fps"]
         if self.resend:
             parts.append(f"再送モード: {len(self.resend)} チャンク")

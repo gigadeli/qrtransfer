@@ -37,4 +37,5 @@ export interface FixtureCase {
   skipped: number;
   meta: string;
   data: string[];
+  repair: string[];
 }

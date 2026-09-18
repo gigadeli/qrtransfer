@@ -18,7 +18,7 @@ from typing import Callable
 
 import numpy as np
 
-from . import extractor, packer, protocol
+from . import extractor, packer, protocol, repair
 
 FLUSH_INTERVAL_SEC = 1.0
 FLUSH_EVERY_CHUNKS = 50
@@ -150,6 +150,7 @@ class _Session:
         self.times: collections.deque[float] = collections.deque()
         self.finished = False
         self.last_len: int | None = None  # 最終チャンクの長さ（META 前でも検証に使う）
+        self.decoder: repair.Decoder | None = None  # 修復用フレームの式（メモリ上だけ。再開時は作り直す）
 
     # --- 永続化 ---------------------------------------------------------------
     def ensure_dir(self) -> None:
@@ -176,6 +177,14 @@ class _Session:
         self.open_chunks()
         self.chunk_file.seek(seq * self.chunk_size)
         self.chunk_file.write(data)
+
+    def read_chunk(self, seq: int) -> bytes:
+        assert self.meta is not None
+        cs = self.meta["chunk_size"]
+        n = cs if seq < self.total - 1 else self.meta["payload_size"] - (self.total - 1) * cs
+        self.open_chunks()
+        self.chunk_file.seek(seq * cs)
+        return self.chunk_file.read(n)
 
     def flush(self) -> None:
         if self.chunk_file is not None:
@@ -427,6 +436,8 @@ class Assembler:
 
         if frame.is_meta:
             status = self._handle_meta(s, frame, callbacks)
+        elif frame.is_repair:
+            status = self._handle_repair(s, frame)
         else:
             status = self._handle_data(s, frame)
         if status in (ST_NEW, ST_META):
@@ -499,15 +510,43 @@ class Assembler:
             if any(len(d) != len(data) and sq < s.total - 1 for sq, d in s.pending.items()):
                 return ST_INVALID
             s.pending[seq] = data
+            self._mark_received(s, seq)
         else:
-            s.write_chunk(seq, data)
+            self._store(s, seq, data)
+            if s.decoder is not None:
+                for q, d in s.decoder.add_known(seq, data):
+                    self._store(s, q, d)
+        return ST_NEW
+
+    def _store(self, s: _Session, seq: int, data: bytes) -> None:
+        if seq == s.total - 1 and s.meta is not None:
+            data = data[:s.meta["payload_size"] - (s.total - 1) * s.meta["chunk_size"]]  # 修復で解けた最終チャンクの埋め草を除く
+        s.write_chunk(seq, data)
+        self._mark_received(s, seq)
+
+    @staticmethod
+    def _mark_received(s: _Session, seq: int) -> None:
         s.bitmap.set(seq)
         s.unflushed += 1
         now = time.monotonic()
         s.times.append(now)
         while now - s.times[0] > RATE_WINDOW_SEC:
             s.times.popleft()
-        return ST_NEW
+
+    def _handle_repair(self, s: _Session, frame: protocol.Frame) -> str:
+        """修復用フレーム: META が届いてから使う（チャンクの大きさが確定している必要がある）。"""
+        if s.meta is None or s.total >= repair.TOTAL_LIMIT or s.bitmap.complete:
+            return ST_DUP
+        cs = s.meta["chunk_size"]
+        if len(frame.payload) != cs:
+            return ST_INVALID
+        if s.decoder is None:
+            s.decoder = repair.Decoder(s.total, cs)
+        idx = repair.indices(s.session_id, frame.seq, s.total)
+        solved = s.decoder.add_repair(idx, frame.payload, lambda i: s.read_chunk(i) if s.bitmap.get(i) else None)
+        for q, d in solved:
+            self._store(s, q, d)
+        return ST_NEW if solved else ST_DUP
 
     def _maybe_complete(self, callbacks: list[Callable[[], None]]) -> CompletionResult | None:
         s = self._session

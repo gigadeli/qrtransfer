@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import numpy as np  # noqa: E402
 
-from qrtransfer import packer, protocol, qrgen  # noqa: E402
+from qrtransfer import packer, protocol, qrgen, repair  # noqa: E402
 
 OUT = ROOT / "web" / "test" / "fixtures"
 SESSION = 0x89ABCDEF
@@ -50,7 +50,7 @@ def plan_for(packed: packer.Packed, compression: str | None, chunk_size: int, se
 
 
 def case(case_id: str, packed: packer.Packed, compression: str | None, chunk_size: int = 300,
-         session_id: int = SESSION, files: dict[str, str] | None = None, skipped: int = 0) -> dict:
+         session_id: int = SESSION, files: dict[str, str] | None = None, skipped: int = 0, repairs: int = 0) -> dict:
     plan = plan_for(packed, compression, chunk_size, session_id)
     return {
         "id": case_id,
@@ -63,6 +63,7 @@ def case(case_id: str, packed: packer.Packed, compression: str | None, chunk_siz
         "skipped": skipped,
         "meta": b64(plan.meta_frame()),
         "data": [b64(plan.data_frame(i)) for i in range(plan.total)],
+        "repair": [b64(f) for f in plan.repair_frames(repairs)],
     }
 
 
@@ -113,6 +114,11 @@ def main() -> None:
         case("empty", packer.Packed("empty.txt", "file", b"", None), "none"),
         case("other_session", packer.Packed("other.txt", "file", b"other session" * 50, None), "none",
              session_id=0x12345678),
+        # 修復用フレーム付き（最終チャンクが短い・圧縮あり・フォルダ）
+        case("repair_file", packer.Packed("repair.bin", "file", random_bytes + text[:777], None), "none",
+             chunk_size=200, session_id=0x5EED0001, repairs=40),
+        case("repair_bundle", packer.Packed("フォルダ", "bundle", bundle, None), "zlib", chunk_size=200,
+             session_id=0xFFFFFFFF, files=files_of(bundle_members), repairs=20),
     ]
     # 伸長爆弾: 伸長すると 50MB になるのに、META では 1MB と名乗る（伸長を途中で打ち切れるかの確認）
     for method in ("lzma", "zlib"):
@@ -123,7 +129,12 @@ def main() -> None:
         meta["raw_size"] = 1_000_000
         c["meta"] = b64(protocol.build_meta_frame(meta_frame.session_id, meta_frame.total, packer.meta_payload(meta)))
         cases.append(c)
-    (OUT / "frames.json").write_text(json.dumps({"cases": cases}, ensure_ascii=False), encoding="utf-8")
+    # 修復用フレームが重ねるチャンクの番号（Python と Web で同じになるかの確認用）
+    vectors = [{"sessionId": sid, "index": r, "total": t, "indices": repair.indices(sid, r, t)}
+               for sid, r, t in [(0, 0, 1), (0x89ABCDEF, 0, 10), (0xFFFFFFFF, 12345, 2049), (1, 7, 100_000),
+                                 (0x5EED0001, 0xFFFFFFFE, 500_000)]]
+    (OUT / "frames.json").write_text(json.dumps({"cases": cases, "repairVectors": vectors}, ensure_ascii=False),
+                                     encoding="utf-8")
 
     # QR 画像（text_zlib を 1 モジュール 4px で）
     from PIL import Image
