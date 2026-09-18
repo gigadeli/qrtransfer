@@ -352,11 +352,46 @@ dd {
   overflow: hidden;
 }
 
+.bar {
+  display: flex;
+}
+
 .bar > div {
   height: 100%;
   background: var(--accent);
-  border-radius: 5px;
   transition: width 0.25s;
+}
+
+/* 修復用 QR から集めた式（まだチャンクになっていない分） */
+.bar > div.pending {
+  background: repeating-linear-gradient(135deg, var(--accent) 0 4px, var(--accent-soft) 4px 8px);
+}
+
+.bar.small {
+  height: 8px;
+}
+
+dd.repairing .count {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  min-width: 6em;
+  text-align: right;
+}
+
+dd.note {
+  grid-column: 2;
+  font-size: 12px;
+  margin-top: -4px;
+}
+
+dd.warn {
+  color: var(--warning);
+  font-weight: 700;
+}
+
+dd .muted {
+  font-weight: 400;
+  font-size: 12px;
 }
 
 .pct {

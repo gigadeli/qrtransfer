@@ -22,6 +22,9 @@ export function humanTime(sec: number): string {
   return `${Math.floor(m / 60)} 時間 ${m % 60} 分`;
 }
 
+/** 取りこぼしがこの割合を超えたら、送信側の設定を見直すよう知らせる */
+const LOSS_WARN = 0.3;
+
 function saveFile(file: ReceivedFile): void {
   // 種類は常に octet-stream にする。download 属性を無視するブラウザ（アプリ内ブラウザなど）でも、
   // 受信した HTML・SVG がこのサイトのページとして開かれ、中のスクリプトが動くことがないように
@@ -115,6 +118,10 @@ export default function App() {
 
   // 修復用の式も進み具合に含める（式がそろった時点でまとめて解けるため、チャンク数だけだと止まって見える）
   const frac = snap.total ? (snap.received + snap.pending) / snap.total : snap.meta ? 1 : 0;
+  // 修復用 QR から集める式: 欠けたチャンクの数だけ集まると、欠けた分がまとめて復元される
+  const lacking = snap.total - snap.received;
+  const repairing = snap.repair && lacking > 0 && !snap.finishing;
+  const lossHigh = snap.loss !== null && snap.loss >= LOSS_WARN;
   const overlay = scanner.overlay && performance.now() - scanner.overlay.time < OVERLAY_TTL_MS ? scanner.overlay : null;
 
   return (
@@ -253,10 +260,29 @@ export default function App() {
             <dt>受信率</dt>
             <dd>
               <div className="bar">
-                <div style={{ width: `${(frac * 100).toFixed(1)}%` }} />
+                <div style={{ width: `${((snap.total ? snap.received / snap.total : frac) * 100).toFixed(2)}%` }} />
+                {snap.pending > 0 && (
+                  <div className="pending" style={{ width: `${((snap.pending / snap.total) * 100).toFixed(2)}%` }} />
+                )}
               </div>
-              <span className="pct">{snap.finishing ? "照合中…" : `${Math.floor(frac * 100)}%`}</span>
+              <span className="pct">{snap.finishing ? "照合中…" : `${(frac * 100).toFixed(frac < 1 ? 1 : 0)}%`}</span>
             </dd>
+            {repairing && (
+              <>
+                <dt>修復</dt>
+                <dd className="repairing">
+                  <div className="bar small">
+                    <div className="pending" style={{ width: `${((snap.pending / lacking) * 100).toFixed(1)}%` }} />
+                  </div>
+                  <span className="count">
+                    {snap.pending} / {lacking}
+                  </span>
+                </dd>
+                <dd className="note muted">
+                  修復用 QR を読むたびに増え、欠けた {lacking} チャンク分がそろうとまとめて復元されます
+                </dd>
+              </>
+            )}
             {snap.sessionId !== null && (
               <>
                 <dt>チャンク</dt>
@@ -269,9 +295,23 @@ export default function App() {
                 </dd>
                 <dt>残り時間</dt>
                 <dd>{snap.etaSec !== null ? humanTime(snap.etaSec) : "-"}</dd>
+                {snap.loss !== null && (
+                  <>
+                    <dt>取りこぼし</dt>
+                    <dd className={lossHigh ? "warn" : undefined}>
+                      約 {Math.round(snap.loss * 100)}%<span className="muted">（直近 5 秒の推定）</span>
+                    </dd>
+                  </>
+                )}
               </>
             )}
           </dl>
+          {lossHigh && (
+            <p className="banner warning">
+              読み取りが表示に追いついていません。送信側の<b>表示速度（fps）</b>か<b>同時に表示する QR の数</b>を下げてください。
+              スマホを固定し、本体が熱くなっていないか（熱くなると処理が遅くなります）も確認してください。
+            </p>
+          )}
           {snap.total > 0 && <ChunkMap bitmap={snap.bitmap} total={snap.total} version={version} />}
         </section>
       )}

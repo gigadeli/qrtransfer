@@ -9,6 +9,7 @@
  */
 import { TooLargeError, decompress, sha256Hex } from "./codec";
 import { makeZip, readTar, sanitizeFilename } from "./archive";
+import { LossMeter } from "./loss";
 import { type Meta, parseMeta } from "./meta";
 import { type Frame, TYPE_META, TYPE_REPAIR } from "./protocol";
 import { RepairDecoder, TOTAL_LIMIT as REPAIR_TOTAL_LIMIT, repairIndices } from "./repair";
@@ -78,6 +79,8 @@ export interface Snapshot {
   pending: number;
   /** 修復用フレームを受け取っている（欠落番号の再送は不要） */
   repair: boolean;
+  /** 直近の取りこぼしの割合（読めずに流れていった QR の割合の推定。0〜1）。推定できないときは null */
+  loss: number | null;
 }
 
 class Session {
@@ -91,6 +94,7 @@ class Session {
   finishing = false;
   finished = false;
   decoder: RepairDecoder | null = null;
+  loss = new LossMeter();
 
   constructor(
     readonly sessionId: number,
@@ -169,6 +173,10 @@ export class Assembler {
       frame.type === TYPE_META ? this.handleMeta(s, frame)
         : frame.type === TYPE_REPAIR ? this.handleRepair(s, frame)
           : this.handleData(s, frame);
+    if ((status === "new" || status === "dup") && frame.type !== TYPE_META) {
+      // 送信側が表示する順（DATA → 修復用）での位置
+      s.loss.add(frame.type === TYPE_REPAIR ? s.total + frame.seq : frame.seq);
+    }
     if (status === "new" || status === "meta") {
       this.maybeComplete(s);
       this.onChange?.();
@@ -237,7 +245,8 @@ export class Assembler {
       // 修復で解けた最終チャンクは、埋め草（0）を除いた本来の長さにする
       data = data.subarray(0, s.meta.payload_size - (s.total - 1) * s.meta.chunk_size);
     }
-    s.chunks[seq] = data;
+    // 4 バイト境界にそろえて持つ（修復の計算で 4 バイトずつ XOR できるように）。フレーム全体の領域も手放せる
+    s.chunks[seq] = data.byteOffset % 4 ? data.slice() : data;
     s.bitmap[seq] = 1;
     s.received++;
     if (event) this.countEvent(s);
@@ -363,7 +372,7 @@ export class Assembler {
       return {
         sessionId: null, total: 0, received: 0, meta: null, bitmap: new Uint8Array(0), ratePerSec: 0,
         bytesPerSec: 0, etaSec: null, conflictSessionId: null, finishing: false, result: this.result,
-        rejected: this.rejected, pending: 0, repair: false,
+        rejected: this.rejected, pending: 0, repair: false, loss: null,
       };
     }
     const now = performance.now();
@@ -378,6 +387,7 @@ export class Assembler {
       etaSec: rate > 0 && remaining > 0 ? remaining / rate : null,
       conflictSessionId: s.finished ? null : this.conflictId, finishing: s.finishing, result: this.result,
       rejected: this.rejected, pending, repair: s.decoder !== null,
+      loss: s.finished ? null : s.loss.rate(now),
     };
   }
 }

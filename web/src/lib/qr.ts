@@ -110,6 +110,9 @@ export function roiOf(points: [number, number][], w: number, h: number): [number
 
 const RETRY_WINDOW = 20; // 読み直しが効いているかを判断する回数
 const RETRY_PROBE = 8; // 効いていないときも、この回数に 1 回は試す（ピントが外れてきたときに備えて）
+// 1 枚の画像で読み直す QR の数の上限。QR を複数並べているとき、切り替わり途中の画像では全部が読めず、
+// 全部を読み直すと読み取り回数が大きく落ちて、次の表示を取りこぼす原因になる
+const RETRY_PER_IMAGE = 1;
 
 /**
  * 素の画像 → 読めなかった QR があれば、その位置の周辺をシャープ化して再試行（複数並んでいるときは 1 つずつ）。
@@ -132,7 +135,7 @@ export class RobustReader {
     const failed = plain.filter((d) => !d.bytes);
     // 位置が見つかったのに読めなかった QR（無ければ、周辺を切り出した画像全体）を読み直す
     const targets: ([number, number, number, number] | null)[] = failed.length
-      ? failed.map((d) => roiOf(d.points, img.width, img.height))
+      ? failed.slice(0, RETRY_PER_IMAGE).map((d) => roiOf(d.points, img.width, img.height))
       : !plain.length && focused ? [[0, 0, img.width, img.height]] : [];
     if (!targets.length || !this.enhance || !this.shouldRetry()) return offset(plain, x0, y0);
     const out = plain.filter((d) => d.bytes);
@@ -149,6 +152,7 @@ export class RobustReader {
         out.push(failed[i]);
       }
     }
+    out.push(...failed.slice(targets.length)); // 読み直さなかった QR も位置は返す（枠の表示用）
     this.record(ok);
     return offset(out, x0, y0);
   }
