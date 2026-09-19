@@ -27,6 +27,11 @@ const LOSS_WARN = 0.3;
 
 const HUD_KEY = "qrtransfer.hud";
 
+const MODES: { value: CameraMode; label: string; detail: string }[] = [
+  { value: "quality", label: "高解像度", detail: "1920×1080" },
+  { value: "speed", label: "高速", detail: "1280×720・60fps" },
+];
+
 /** 「進捗を映像に表示」の設定（この端末のブラウザに覚える。使えない環境では既定の ON） */
 function loadHud(): boolean {
   try {
@@ -115,6 +120,20 @@ export default function App() {
   }, [assembler, snap.sessionId, snap.received, snap.total]);
 
   const result = snap.result;
+  const done = snap.finishing || !!result;
+
+  // 全チャンクがそろった（照合を始めた）時点でカメラを止める。読み取りの処理も止まり、照合が速く終わる
+  const stopScanner = scanner.stop;
+  useEffect(() => {
+    if (done && scanner.running) stopScanner();
+  }, [done, scanner.running, stopScanner]);
+
+  /** 結果を閉じて次の受信を待つ。カメラは自動で止めたので、もう一度起動する */
+  const next = () => {
+    assembler.reset();
+    void scanner.start();
+  };
+
   const shareFile = useMemo(() => makeShareFile(result?.file), [result]);
 
   const copyMissing = async () => {
@@ -148,12 +167,17 @@ export default function App() {
   return (
     <div className="app">
       <header className="top">
+        <span className="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 14v5h14v-5M12 4v11M8 11l4 4 4-4" />
+          </svg>
+        </span>
         <h1>QRTransfer</h1>
         <span className="muted">受信</span>
         <span className="build muted">{__BUILD_INFO__}</span>
       </header>
 
-      <section className={`camera card ${scanner.running ? "on" : ""}`}>
+      <section className={`camera card ${scanner.running ? "on" : ""} ${done && !scanner.running ? "done" : ""}`}>
         <div className="viewport">
           <video ref={scanner.videoRef} playsInline muted />
           {overlay && (
@@ -191,10 +215,19 @@ export default function App() {
           )}
           {!scanner.running && (
             <div className="placeholder">
-              <button className="primary big" onClick={() => void scanner.start()}>
-                カメラを起動
-              </button>
-              <p className="muted">パソコンの QRTransfer で送信を始め、画面の QR にカメラを向けてください</p>
+              {done ? (
+                <>
+                  <p className="done-note">{result ? "受信が終わったので、カメラを止めました" : "すべて受信しました。照合しています…"}</p>
+                  {result && <button onClick={next}>次の受信を始める</button>}
+                </>
+              ) : (
+                <>
+                  <button className="primary big" onClick={() => void scanner.start()}>
+                    カメラを起動
+                  </button>
+                  <p className="muted">パソコンの QRTransfer で送信を始め、画面の QR にカメラを向けてください</p>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -210,15 +243,21 @@ export default function App() {
                 ))}
               </select>
             )}
-            <select
-              value={scanner.mode}
-              onChange={(e) => scanner.setMode(e.target.value as CameraMode)}
+            <div
+              className="segmented"
+              role="group"
               aria-label="カメラの撮り方"
               title="高速: 1 枚の撮影時間が短く、QR の切り替わりが混ざった画像が減ります。1 マスが粗くなるので、QR を複数並べるときは高解像度がおすすめです"
+              style={{ "--count": MODES.length, "--index": MODES.findIndex((m) => m.value === scanner.mode) } as React.CSSProperties}
             >
-              <option value="quality">高解像度（1920×1080）</option>
-              <option value="speed">高速（1280×720・60fps）</option>
-            </select>
+              <span className="thumb" aria-hidden="true" />
+              {MODES.map((m) => (
+                <button key={m.value} aria-pressed={scanner.mode === m.value} onClick={() => scanner.setMode(m.value)}>
+                  {m.label}
+                  <small>{m.detail}</small>
+                </button>
+              ))}
+            </div>
             <label className="switch">
               <input type="checkbox" checked={enhance} onChange={(e) => toggleEnhance(e.target.checked)} />
               <span>画像補正</span>
@@ -234,7 +273,7 @@ export default function App() {
               />
               <span>進捗を映像に表示</span>
             </label>
-            <button className="ghost" onClick={scanner.stop}>
+            <button className="stop" onClick={scanner.stop}>
               停止
             </button>
           </div>
@@ -292,7 +331,7 @@ export default function App() {
                 <button className={shareFile ? "" : "primary"} onClick={() => saveFile(result.file!)}>
                   ダウンロード
                 </button>
-                <button className="ghost" onClick={() => assembler.reset()}>
+                <button className="ghost" onClick={next}>
                   次の受信へ
                 </button>
               </div>
@@ -304,7 +343,7 @@ export default function App() {
               <p>{result.message}</p>
               <p className="muted">パソコン側で送信を始め直してください（同じ送信の表示を続けても、この転送は受信しません）。</p>
               <div className="actions">
-                <button className="primary" onClick={() => assembler.reset()}>
+                <button className="primary" onClick={next}>
                   次の受信へ
                 </button>
               </div>
@@ -315,7 +354,25 @@ export default function App() {
 
       {!result && (
         <section className="card progress">
-          <h2>進捗</h2>
+          <div className="headline">
+            <h2>進捗</h2>
+            <span className="big-pct">
+              {snap.finishing ? (
+                "照合中…"
+              ) : (
+                <>
+                  {(frac * 100).toFixed(frac < 1 ? 1 : 0)}
+                  <small>%</small>
+                </>
+              )}
+            </span>
+          </div>
+          <div className="bar">
+            <div style={{ width: `${((snap.total ? snap.received / snap.total : frac) * 100).toFixed(2)}%` }} />
+            {snap.pending > 0 && (
+              <div className="pending" style={{ width: `${((snap.pending / snap.total) * 100).toFixed(2)}%` }} />
+            )}
+          </div>
           <dl>
             <dt>ファイル</dt>
             <dd>
@@ -324,16 +381,6 @@ export default function App() {
                 : snap.meta
                   ? `${snap.meta.name}　${humanSize(snap.meta.raw_size)}`
                   : "メタ情報待ち"}
-            </dd>
-            <dt>受信率</dt>
-            <dd>
-              <div className="bar">
-                <div style={{ width: `${((snap.total ? snap.received / snap.total : frac) * 100).toFixed(2)}%` }} />
-                {snap.pending > 0 && (
-                  <div className="pending" style={{ width: `${((snap.pending / snap.total) * 100).toFixed(2)}%` }} />
-                )}
-              </div>
-              <span className="pct">{snap.finishing ? "照合中…" : `${(frac * 100).toFixed(frac < 1 ? 1 : 0)}%`}</span>
             </dd>
             {repairing && (
               <>

@@ -1,50 +1,83 @@
-/* デスクトップ版（ui/theme.py）と同じ色づかい。ライト／ダークは端末の設定に合わせる */
+/*
+ * Liquid Glass 風のデザイン。
+ * 色のついた背景の上に、半透明でぼかしのかかった「ガラス」の面を重ねる。
+ * ガラスの縁は上側を明るく（光が当たる側）、下側を淡くして厚みを出す。
+ * ライト／ダークは端末の設定に合わせ、透明度を下げる設定の端末では不透明な面に切り替える。
+ */
 :root {
-  --bg: #f3f4f7;
-  --surface: #ffffff;
-  --surface2: #f6f7f9;
-  --hover: #eceef2;
-  --border: #e1e4ea;
-  --text: #1b1f27;
-  --muted: #6b7280;
+  --bg: #eef1f8;
+  --text: #121620;
+  --muted: #5d6576;
   --accent: #2563eb;
   --accent-hover: #1d4ed8;
-  --accent-soft: #e6eeff;
+  --accent-soft: #dbe6ff;
   --on-accent: #ffffff;
   --success: #15803d;
-  --success-soft: #e8f7ee;
   --warning: #b45309;
-  --warning-soft: #fff5e0;
   --danger: #dc2626;
-  --danger-soft: #fdecec;
-  --preview-bg: #14161b;
+  --preview-bg: #0f1116;
   --chunk-done: #22c55e;
   --chunk-partial: #a7e3b8;
-  --chunk-none: #e5e7eb;
+  --chunk-none: rgb(20 30 60 / 0.1);
+
+  /* 背景の色のにじみ（ガラス越しに見える色） */
+  --blob1: rgb(96 140 255 / 0.55);
+  --blob2: rgb(190 120 255 / 0.4);
+  --blob3: rgb(60 210 200 / 0.4);
+  --blob4: rgb(255 170 120 / 0.3);
+
+  /* ガラス */
+  --glass: rgb(255 255 255 / 0.5);
+  --glass-strong: rgb(255 255 255 / 0.68);
+  --glass-control: rgb(255 255 255 / 0.55);
+  --glass-control-hover: rgb(255 255 255 / 0.75);
+  --glass-edge: rgb(255 255 255 / 0.85);
+  --glass-edge-low: rgb(255 255 255 / 0.25);
+  --glass-line: rgb(255 255 255 / 0.6);
+  --glass-shadow: 0 10px 34px rgb(30 45 90 / 0.14), 0 2px 6px rgb(30 45 90 / 0.06);
+  --glass-blur: blur(22px) saturate(180%);
+  --well: rgb(20 30 60 / 0.07); /* 面の中のくぼみ（進捗バーの溝など） */
+
+  --tint-success: rgb(34 197 94 / 0.16);
+  --tint-warning: rgb(245 158 11 / 0.16);
+  --tint-danger: rgb(239 68 68 / 0.14);
+
   color-scheme: light dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #15171c;
-    --surface: #1e2127;
-    --surface2: #262a31;
-    --hover: #2e333b;
-    --border: #323741;
-    --text: #e8eaef;
-    --muted: #9aa1ad;
-    --accent: #4f8cff;
-    --accent-hover: #6a9dff;
-    --accent-soft: #1f2b45;
+    --bg: #0b0d14;
+    --text: #eef0f5;
+    --muted: #a1a8b6;
+    --accent: #5b93ff;
+    --accent-hover: #78a6ff;
+    --accent-soft: #1d2a48;
     --success: #4ade80;
-    --success-soft: #16291e;
     --warning: #fbbf24;
-    --warning-soft: #2e2614;
     --danger: #f87171;
-    --danger-soft: #321a1c;
-    --preview-bg: #0d0f12;
+    --preview-bg: #06070a;
     --chunk-partial: #2f7a48;
-    --chunk-none: #343943;
+    --chunk-none: rgb(255 255 255 / 0.1);
+
+    --blob1: rgb(50 90 230 / 0.5);
+    --blob2: rgb(140 60 220 / 0.38);
+    --blob3: rgb(20 150 150 / 0.35);
+    --blob4: rgb(220 90 60 / 0.22);
+
+    --glass: rgb(30 34 46 / 0.5);
+    --glass-strong: rgb(34 38 52 / 0.7);
+    --glass-control: rgb(255 255 255 / 0.1);
+    --glass-control-hover: rgb(255 255 255 / 0.17);
+    --glass-edge: rgb(255 255 255 / 0.28);
+    --glass-edge-low: rgb(255 255 255 / 0.06);
+    --glass-line: rgb(255 255 255 / 0.14);
+    --glass-shadow: 0 12px 38px rgb(0 0 0 / 0.45), 0 2px 6px rgb(0 0 0 / 0.3);
+    --well: rgb(255 255 255 / 0.08);
+
+    --tint-success: rgb(74 222 128 / 0.14);
+    --tint-warning: rgb(251 191 36 / 0.14);
+    --tint-danger: rgb(248 113 113 / 0.14);
   }
 }
 
@@ -55,6 +88,7 @@
 html,
 body {
   margin: 0;
+  min-height: 100%;
   background: var(--bg);
   color: var(--text);
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", sans-serif;
@@ -62,20 +96,99 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* 背景の色のにじみ。画面に固定し、スクロールしても描き直さない（動かさないので処理は軽い） */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -10vmax;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(38vmax 38vmax at 12% 8%, var(--blob1), transparent 70%),
+    radial-gradient(34vmax 34vmax at 92% 22%, var(--blob2), transparent 70%),
+    radial-gradient(40vmax 40vmax at 20% 78%, var(--blob3), transparent 70%),
+    radial-gradient(30vmax 30vmax at 85% 92%, var(--blob4), transparent 70%),
+    var(--bg);
+}
+
 .app {
   max-width: 760px;
   margin: 0 auto;
-  padding: calc(env(safe-area-inset-top, 0px) + 12px) 14px calc(env(safe-area-inset-bottom, 0px) + 24px);
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px calc(env(safe-area-inset-bottom, 0px) + 28px);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+}
+
+/* ガラスの面（カード・ヘッダー・ボタンで共通） */
+.glass,
+.card,
+.top,
+.banner,
+button,
+select,
+.segmented {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-line);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-low),
+    var(--glass-shadow);
+}
+
+/* 面の縁に沿った光の反射（左上から差し込む光） */
+.card,
+.top {
+  position: relative;
+  isolation: isolate;
+}
+
+.card::before,
+.top::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--glass-edge) 0%, transparent 35%, transparent 65%, var(--glass-edge-low) 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  pointer-events: none;
+  z-index: 1;
 }
 
 .top {
+  position: sticky;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  z-index: 10;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
-  padding: 2px 4px;
+  padding: 8px 10px 8px 8px;
+  border-radius: 999px;
+}
+
+.top .logo {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(160deg, #5b93ff, #2563eb 60%, #1e40af);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.55), 0 2px 8px rgb(37 99 235 / 0.4);
+}
+
+.top .logo svg {
+  width: 18px;
+  height: 18px;
+}
+
+.top > * {
+  white-space: nowrap;
 }
 
 .top .build {
@@ -83,20 +196,24 @@ body {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 h1 {
   margin: 0;
-  font-size: 22px;
+  font-size: 18px;
   font-weight: 800;
   letter-spacing: -0.01em;
 }
 
 h2 {
-  margin: 0 0 8px;
+  margin: 0 0 10px;
   font-size: 13px;
   font-weight: 700;
   color: var(--muted);
+  letter-spacing: 0.02em;
 }
 
 p {
@@ -109,10 +226,8 @@ p {
 }
 
 .card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 14px;
+  border-radius: 26px;
+  padding: 16px;
 }
 
 /* カメラ */
@@ -122,15 +237,23 @@ p {
 
 .viewport {
   position: relative;
-  border-radius: 12px;
+  border-radius: 20px;
   overflow: hidden;
   background: var(--preview-bg);
   aspect-ratio: 4 / 3;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
+  transition: aspect-ratio 0.3s;
 }
 
 .camera.on .viewport {
   aspect-ratio: auto;
   min-height: 200px;
+}
+
+/* 受信が終わってカメラを止めた後は、結果が見えるよう小さくする */
+.camera.done .viewport {
+  aspect-ratio: auto;
+  min-height: 150px;
 }
 
 video {
@@ -156,13 +279,9 @@ video {
 
 .overlay polygon {
   fill: none;
-  stroke-width: 6;
+  stroke-width: 3;
   vector-effect: non-scaling-stroke;
   stroke-linejoin: round;
-}
-
-.overlay polygon {
-  stroke-width: 3;
 }
 
 .overlay .ok {
@@ -173,14 +292,23 @@ video {
   stroke: #ef4444;
 }
 
-/* 映像に重ねる進捗（映像の上端。QR の読み取りには使わないので、操作は下の要素に通す） */
+/*
+ * 映像に重ねる進捗。映像の上に浮かぶ暗いガラスのカプセル。
+ * QR の読み取りには使わないので、操作は下の要素に通す。
+ * ぼかしは映像のフレームごとに描き直されるので、弱めにして負荷を抑える。
+ */
 .hud {
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  padding: 8px 10px 9px;
-  background: rgb(0 0 0 / 0.55);
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  padding: 8px 14px 10px;
+  border-radius: 18px;
+  background: rgb(12 14 20 / 0.42);
+  -webkit-backdrop-filter: blur(10px) saturate(160%);
+  backdrop-filter: blur(10px) saturate(160%);
+  border: 1px solid rgb(255 255 255 / 0.16);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 6px 20px rgb(0 0 0 / 0.25);
   color: #fff;
   pointer-events: none;
   display: flex;
@@ -195,6 +323,7 @@ video {
   gap: 4px 12px;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
 }
 
 .hud-line b {
@@ -203,15 +332,15 @@ video {
 }
 
 .hud-warn {
-  color: #fbbf24;
+  color: #fcd34d;
   font-weight: 700;
 }
 
 .bar.hud-bar {
   flex: none;
   height: 6px;
-  border-color: rgb(255 255 255 / 0.3);
-  background: rgb(255 255 255 / 0.15);
+  background: rgb(255 255 255 / 0.18);
+  box-shadow: none;
 }
 
 .placeholder {
@@ -224,18 +353,27 @@ video {
   gap: 12px;
   padding: 20px;
   text-align: center;
+  background:
+    radial-gradient(60% 70% at 30% 20%, rgb(91 147 255 / 0.28), transparent 70%),
+    radial-gradient(60% 70% at 80% 90%, rgb(160 90 255 / 0.22), transparent 70%);
 }
 
 .placeholder .muted {
-  color: #aab1bd;
+  color: #b8bfcc;
   max-width: 320px;
+}
+
+.placeholder .done-note {
+  color: #d9f99d;
+  font-weight: 600;
+  font-size: 14px;
 }
 
 .controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 8px 12px;
   padding: 10px 4px 2px;
 }
 
@@ -244,87 +382,150 @@ video {
   min-width: 0;
 }
 
-.stats {
-  margin: 4px 6px 2px;
+.controls .stop {
+  margin-left: auto;
 }
 
-/* ボタン・入力 */
+.stats {
+  margin: 6px 8px 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ボタン・入力（カプセル形のガラス） */
 button,
 select {
   font: inherit;
   color: var(--text);
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 9px 16px;
+  background: var(--glass-control);
+  border-radius: 999px;
+  padding: 9px 18px;
   min-height: 42px;
   cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 -1px 0 var(--glass-edge-low),
+    0 2px 8px rgb(30 45 90 / 0.08);
+  transition:
+    background 0.15s,
+    transform 0.15s cubic-bezier(0.3, 1.6, 0.5, 1),
+    box-shadow 0.15s;
 }
 
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position:
+    right 20px center,
+    right 15px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  background-color: var(--glass-control);
+}
+
+/* 押すと少し縮み、離すと弾んで戻る */
 button:active {
-  background: var(--border);
+  transform: scale(0.96);
 }
 
 @media (hover: hover) {
-  button:hover {
-    background: var(--hover);
+  button:hover,
+  select:hover {
+    background-color: var(--glass-control-hover);
   }
   button.primary:hover {
-    background: var(--accent-hover);
+    background-color: var(--accent-hover);
+  }
+  button.ghost:hover {
+    background-color: var(--glass-control);
   }
 }
 
+button:focus-visible,
+select:focus-visible,
+.switch input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 色つきのガラス（主な操作） */
 button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background-color: var(--accent);
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.28), rgb(255 255 255 / 0) 55%);
+  border-color: rgb(255 255 255 / 0.35);
   color: var(--on-accent);
-  font-weight: 600;
+  font-weight: 650;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.5),
+    inset 0 -2px 6px rgb(0 0 0 / 0.12),
+    0 6px 18px rgb(37 99 235 / 0.35);
 }
 
 button.big {
   font-size: 17px;
-  padding: 12px 28px;
-  min-height: 50px;
-  border-radius: 14px;
+  padding: 13px 32px;
+  min-height: 52px;
 }
 
 button.ghost {
   background: transparent;
   border-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   color: var(--muted);
 }
 
+/* 映像の上に置くボタン（暗い背景でも読めるよう、明るいガラスにする） */
+.placeholder button:not(.primary) {
+  background-color: rgb(255 255 255 / 0.14);
+  border-color: rgb(255 255 255 / 0.22);
+  color: #fff;
+}
+
+/* 切り替えスイッチ（つまみもガラス） */
 .switch {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-size: 14px;
   user-select: none;
+  cursor: pointer;
 }
 
 .switch input {
   appearance: none;
-  width: 42px;
-  height: 26px;
-  border-radius: 13px;
-  background: var(--border);
+  -webkit-appearance: none;
+  flex: none;
+  width: 50px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--well);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.12);
   position: relative;
   margin: 0;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.2s;
 }
 
 .switch input::after {
   content: "";
   position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
-  transition: transform 0.15s;
+  top: 2px;
+  left: 2px;
+  width: 30px;
+  height: 24px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #fff, #f1f3f8);
+  box-shadow:
+    inset 0 1px 0 #fff,
+    0 1px 2px rgb(0 0 0 / 0.18),
+    0 3px 8px rgb(0 0 0 / 0.12);
+  transition: transform 0.25s cubic-bezier(0.3, 1.5, 0.5, 1);
 }
 
 .switch input:checked {
@@ -335,10 +536,76 @@ button.ghost {
   transform: translateX(16px);
 }
 
+/* 二択の切り替え（つまみが選んだ側へ滑る） */
+.segmented {
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--well);
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.1);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  flex: 1 1 220px;
+}
+
+.segmented .thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / var(--count));
+  border-radius: 999px;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(8px) saturate(180%);
+  backdrop-filter: blur(8px) saturate(180%);
+  border: 1px solid var(--glass-line);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    0 2px 8px rgb(0 0 0 / 0.12);
+  transform: translateX(calc(100% * var(--index)));
+  transition: transform 0.3s cubic-bezier(0.3, 1.3, 0.5, 1);
+}
+
+.segmented button {
+  position: relative;
+  z-index: 1;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 1.2;
+  color: var(--muted);
+}
+
+.segmented button small {
+  display: block;
+  font-size: 10.5px;
+  opacity: 0.8;
+}
+
+.segmented button[aria-pressed="true"] {
+  color: var(--text);
+  font-weight: 650;
+}
+
+@media (hover: hover) {
+  .segmented button:hover {
+    background: transparent;
+    color: var(--text);
+  }
+}
+
 /* お知らせの帯 */
 .banner {
-  border-radius: 12px;
-  padding: 10px 14px;
+  border-radius: 18px;
+  padding: 10px 16px;
   margin: 8px 0 0;
   font-size: 14px;
 }
@@ -352,20 +619,52 @@ button.ghost {
 }
 
 .banner.warning {
-  background: var(--warning-soft);
-  border: 1px solid var(--warning);
+  background-color: var(--tint-warning);
+  border-color: rgb(245 158 11 / 0.45);
 }
 
 .banner.danger {
-  background: var(--danger-soft);
-  border: 1px solid var(--danger);
+  background-color: var(--tint-danger);
+  border-color: rgb(239 68 68 / 0.45);
 }
 
 /* 進捗 */
+.progress .headline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.progress .headline h2 {
+  margin: 0;
+}
+
+.progress .big-pct {
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress .big-pct small {
+  font-size: 16px;
+  font-weight: 700;
+  margin-left: 1px;
+  color: var(--muted);
+}
+
+.progress > .bar {
+  height: 12px;
+  margin-bottom: 14px;
+}
+
 dl {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 6px 14px;
+  gap: 7px 14px;
   margin: 0 0 12px;
   align-items: center;
 }
@@ -382,30 +681,37 @@ dd {
   display: flex;
   align-items: center;
   gap: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .bar {
   flex: 1;
+  display: flex;
   height: 10px;
-  border-radius: 5px;
-  background: var(--surface2);
-  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--well);
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.12);
   overflow: hidden;
 }
 
-.bar {
-  display: flex;
-}
-
+/* 進んだ部分は光沢のあるガラスの棒 */
 .bar > div {
   height: 100%;
-  background: var(--accent);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.45), rgb(255 255 255 / 0) 60%),
+    linear-gradient(90deg, #4f8cff, var(--accent));
   transition: width 0.25s;
+}
+
+.bar > div:first-child {
+  border-radius: 999px 0 0 999px;
 }
 
 /* 修復用 QR から集めた式（まだチャンクになっていない分） */
 .bar > div.pending {
-  background: repeating-linear-gradient(135deg, var(--accent) 0 4px, var(--accent-soft) 4px 8px);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.35), rgb(255 255 255 / 0) 60%),
+    repeating-linear-gradient(135deg, var(--accent) 0 4px, var(--accent-soft) 4px 8px);
 }
 
 .bar.small {
@@ -413,7 +719,6 @@ dd {
 }
 
 dd.repairing .count {
-  font-variant-numeric: tabular-nums;
   font-size: 13px;
   min-width: 6em;
   text-align: right;
@@ -435,13 +740,6 @@ dd .muted {
   font-size: 12px;
 }
 
-.pct {
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  min-width: 3.2em;
-  text-align: right;
-}
-
 .chunk-map {
   display: block;
   width: 100%;
@@ -450,10 +748,10 @@ dd .muted {
 /* 欠落番号 */
 .missing pre {
   margin: 8px 0;
-  padding: 10px 12px;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
+  padding: 10px 14px;
+  background: var(--well);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.1);
   white-space: pre-wrap;
   word-break: break-all;
   font: 14px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -466,38 +764,72 @@ dd .muted {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 
-/* 結果 */
+/* 結果（色つきのガラス） */
 .result.success {
-  background: var(--success-soft);
-  border-color: var(--success);
+  background-color: var(--tint-success);
+  border-color: rgb(34 197 94 / 0.4);
 }
 
 .result.danger {
-  background: var(--danger-soft);
-  border-color: var(--danger);
+  background-color: var(--tint-danger);
+  border-color: rgb(239 68 68 / 0.4);
 }
 
 .result h2 {
-  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
   color: var(--success);
+}
+
+.result h2::before {
+  content: "✓";
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  font-size: 15px;
+  color: #fff;
+  background: linear-gradient(160deg, #4ade80, #16a34a);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5), 0 2px 8px rgb(22 163 74 / 0.4);
 }
 
 .result.danger h2 {
   color: var(--danger);
 }
 
+.result.danger h2::before {
+  content: "!";
+  background: linear-gradient(160deg, #f87171, #dc2626);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5), 0 2px 8px rgb(220 38 38 / 0.4);
+}
+
 .result .name {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
 
+/* 結果が出たときに浮かび上がる */
+.result {
+  animation: rise 0.45s cubic-bezier(0.25, 1.3, 0.5, 1);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+}
+
 .preview {
-  margin: 10px 0;
-  border-radius: 10px;
+  margin: 12px 0;
+  border-radius: 16px;
   overflow: hidden;
   background: var(--preview-bg);
   display: flex;
@@ -523,14 +855,53 @@ dd .muted {
 
 .preview.text {
   display: block;
-  margin: 10px 0;
-  padding: 10px 12px;
+  margin: 12px 0;
+  padding: 10px 14px;
   max-height: 50vh;
   overflow: auto;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--well);
   color: var(--text);
   font-size: 13px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* ぼかしが使えないブラウザ、または「透明度を下げる」設定の端末では不透明な面にする（文字を読みやすく） */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass: rgb(255 255 255 / 0.92);
+    --glass-control: rgb(255 255 255 / 0.95);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --glass: rgb(30 34 46 / 0.94);
+      --glass-control: rgb(48 53 66 / 0.95);
+    }
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass: rgb(255 255 255 / 0.96);
+    --glass-control: #fff;
+  }
+  .hud {
+    background: rgb(12 14 20 / 0.85);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
+  :root {
+    --glass: #1c2029;
+    --glass-control: #2a2f3a;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
 }
