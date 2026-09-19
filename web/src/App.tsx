@@ -3,7 +3,7 @@ import { Assembler, type CompletionResult, type ReceivedFile, type Snapshot } fr
 import { hex32, parseFrame } from "./lib/protocol";
 import { ChunkMap } from "./components/ChunkMap";
 import { Preview } from "./components/Preview";
-import { useScanner } from "./useScanner";
+import { type CameraMode, useScanner } from "./useScanner";
 
 const OVERLAY_TTL_MS = 400;
 const MISSING_DISPLAY_ITEMS = 200;
@@ -210,6 +210,15 @@ export default function App() {
                 ))}
               </select>
             )}
+            <select
+              value={scanner.mode}
+              onChange={(e) => scanner.setMode(e.target.value as CameraMode)}
+              aria-label="カメラの撮り方"
+              title="高速: 1 枚の撮影時間が短く、QR の切り替わりが混ざった画像が減ります。1 マスが粗くなるので、QR を複数並べるときは高解像度がおすすめです"
+            >
+              <option value="quality">高解像度（1920×1080）</option>
+              <option value="speed">高速（1280×720・60fps）</option>
+            </select>
             <label className="switch">
               <input type="checkbox" checked={enhance} onChange={(e) => toggleEnhance(e.target.checked)} />
               <span>画像補正</span>
@@ -234,6 +243,7 @@ export default function App() {
           <p className="stats muted">
             {scanner.stats.videoWidth}×{scanner.stats.videoHeight}
             {scanner.stats.videoFps > 0 && ` ${Math.round(scanner.stats.videoFps)}fps`}　読み取り {scanner.stats.decodesPerSec.toFixed(0)} 回/秒
+            {scanner.workers > 1 && `（${scanner.workers} 並列）`}
             {scanner.stats.rescued > 0 && `　補正で読めた ${scanner.stats.rescued} 枚`}
           </p>
         )}
