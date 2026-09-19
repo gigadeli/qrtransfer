@@ -85,29 +85,33 @@
   box-sizing: border-box;
 }
 
+/* 背景色は html だけに付ける（body にも付けると、下の色のにじみが body の範囲だけ隠れて見切れる） */
+html {
+  background: var(--bg);
+}
+
 html,
 body {
   margin: 0;
   min-height: 100%;
-  background: var(--bg);
   color: var(--text);
   font: 15px/1.55 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", sans-serif;
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
 }
 
-/* 背景の色のにじみ。画面に固定し、スクロールしても描き直さない（動かさないので処理は軽い） */
+/* 背景の色のにじみ。画面いっぱいに固定し、スクロールしても描き直さない（動かさないので処理は軽い） */
 body::before {
   content: "";
   position: fixed;
-  inset: -10vmax;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(38vmax 38vmax at 12% 8%, var(--blob1), transparent 70%),
-    radial-gradient(34vmax 34vmax at 92% 22%, var(--blob2), transparent 70%),
-    radial-gradient(40vmax 40vmax at 20% 78%, var(--blob3), transparent 70%),
-    radial-gradient(30vmax 30vmax at 85% 92%, var(--blob4), transparent 70%),
+    radial-gradient(60vmax 60vmax at 5% 0%, var(--blob1), transparent 60%),
+    radial-gradient(55vmax 55vmax at 100% 30%, var(--blob2), transparent 60%),
+    radial-gradient(60vmax 60vmax at 10% 75%, var(--blob3), transparent 60%),
+    radial-gradient(50vmax 50vmax at 95% 100%, var(--blob4), transparent 60%),
     var(--bg);
 }
 
@@ -161,9 +165,6 @@ select,
 }
 
 .top {
-  position: sticky;
-  top: calc(env(safe-area-inset-top, 0px) + 8px);
-  z-index: 10;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -295,7 +296,7 @@ video {
 /*
  * 映像に重ねる進捗。映像の上に浮かぶ暗いガラスのカプセル。
  * QR の読み取りには使わないので、操作は下の要素に通す。
- * ぼかしは映像のフレームごとに描き直されるので、弱めにして負荷を抑える。
+ * 映像の上のぼかしはフレームごとに描き直されて読み取りが遅くなるため、ぼかさず濃い半透明にする。
  */
 .hud {
   position: absolute;
@@ -304,9 +305,7 @@ video {
   right: 8px;
   padding: 8px 14px 10px;
   border-radius: 18px;
-  background: rgb(12 14 20 / 0.42);
-  -webkit-backdrop-filter: blur(10px) saturate(160%);
-  backdrop-filter: blur(10px) saturate(160%);
+  background: linear-gradient(180deg, rgb(40 44 56 / 0.72), rgb(12 14 20 / 0.66));
   border: 1px solid rgb(255 255 255 / 0.16);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28), 0 6px 20px rgb(0 0 0 / 0.25);
   color: #fff;
@@ -487,53 +486,108 @@ button.ghost {
   color: #fff;
 }
 
-/* 切り替えスイッチ（つまみもガラス） */
+/*
+ * 切り替えスイッチ（Liquid Glass のトグル）。
+ * OFF: くぼんだ灰色の溝に白い丸いつまみ。
+ * ON: 緑の溝の上に、溝からはみ出す透明なガラスのレンズ（白い縁と、縁の内側に映り込む緑の輪）。
+ * 押している間は、OFF でもつまみがレンズに変わる。
+ */
 .switch {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-size: 14px;
   user-select: none;
   cursor: pointer;
+  --switch-on: #2bd14f;
+  --switch-off: #e2e3e7;
+  --switch-knob: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  .switch {
+    --switch-on: #30d158;
+    --switch-off: rgb(255 255 255 / 0.16);
+    --switch-knob: #f4f5f7;
+  }
 }
 
 .switch input {
   appearance: none;
   -webkit-appearance: none;
   flex: none;
-  width: 50px;
-  height: 28px;
+  width: 54px;
+  height: 30px;
   border-radius: 999px;
-  background: var(--well);
-  box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.12);
+  background: var(--switch-off);
+  box-shadow:
+    inset 0 2px 5px rgb(0 0 0 / 0.16),
+    inset 0 -1px 0 rgb(255 255 255 / 0.5);
   position: relative;
-  margin: 0;
+  margin: 4px 0;
   cursor: pointer;
-  transition: background 0.2s;
+  overflow: visible;
+  transition: background 0.25s, box-shadow 0.25s;
 }
 
+.switch input:checked {
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0) 60%), var(--switch-on);
+  box-shadow:
+    inset 0 2px 5px rgb(0 60 10 / 0.25),
+    inset 0 -1px 0 rgb(255 255 255 / 0.35),
+    0 2px 10px rgb(43 209 79 / 0.3);
+}
+
+/* つまみ */
 .switch input::after {
   content: "";
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 30px;
-  height: 24px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #fff, #f1f3f8);
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--switch-knob);
+  border: 0 solid rgb(255 255 255 / 0.95);
   box-shadow:
-    inset 0 1px 0 #fff,
-    0 1px 2px rgb(0 0 0 / 0.18),
-    0 3px 8px rgb(0 0 0 / 0.12);
-  transition: transform 0.25s cubic-bezier(0.3, 1.5, 0.5, 1);
+    0 1px 2px rgb(0 0 0 / 0.16),
+    0 3px 8px rgb(0 0 0 / 0.14);
+  transition:
+    transform 0.4s cubic-bezier(0.3, 1.45, 0.5, 1),
+    background 0.2s,
+    border-width 0.2s,
+    box-shadow 0.2s;
+}
+
+/* ガラスのレンズ（ON のとき・押している間） */
+.switch input:checked::after,
+.switch input:active::after {
+  background:
+    radial-gradient(circle at 50% 38%, rgb(255 255 255 / 0.4), rgb(255 255 255 / 0.12) 55%, rgb(255 255 255 / 0.04) 68%, transparent 70%),
+    rgb(255 255 255 / 0.1);
+  border-width: 1.5px;
+  box-shadow:
+    inset 0 0 0 2px rgb(255 255 255 / 0.35),
+    inset 0 0 4px 3px var(--lens-ring, rgb(255 255 255 / 0.55)),
+    inset 0 1px 1px rgb(255 255 255 / 0.9),
+    0 0 0 1px rgb(255 255 255 / 0.45),
+    0 4px 12px rgb(0 0 0 / 0.16);
 }
 
 .switch input:checked {
-  background: var(--accent);
+  --lens-ring: rgb(90 255 120 / 0.8);
 }
 
 .switch input:checked::after {
-  transform: translateX(16px);
+  transform: translateX(24px) scale(1.4);
+}
+
+.switch input:not(:checked):active::after {
+  transform: translateX(3px) scale(1.4);
+}
+
+.switch input:checked:active::after {
+  transform: translateX(21px) scale(1.5);
 }
 
 /* 二択の切り替え（つまみが選んだ側へ滑る） */
@@ -864,6 +918,33 @@ dd .muted {
   font-size: 13px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/*
+ * カメラの動作中はぼかしをすべて止める。ぼかしは描き直しのたびに GPU を使い、
+ * 映像の取り込みや読み取りと取り合って、1 秒あたりの読み取り回数が下がるため。
+ * 面は少し不透明にし、縁の光と影はそのまま残してガラスらしさを保つ。
+ */
+.app.scanning {
+  --glass: rgb(255 255 255 / 0.82);
+  --glass-strong: rgb(255 255 255 / 0.95);
+  --glass-control: rgb(255 255 255 / 0.85);
+  --glass-control-hover: rgb(255 255 255 / 0.95);
+}
+
+@media (prefers-color-scheme: dark) {
+  .app.scanning {
+    --glass: rgb(28 32 43 / 0.9);
+    --glass-strong: rgb(52 58 74 / 0.95);
+    --glass-control: rgb(52 58 74 / 0.9);
+    --glass-control-hover: rgb(64 71 90 / 0.95);
+  }
+}
+
+.app.scanning,
+.app.scanning * {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
 }
 
 /* ぼかしが使えないブラウザ、または「透明度を下げる」設定の端末では不透明な面にする（文字を読みやすく） */

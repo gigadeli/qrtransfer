@@ -170,7 +170,8 @@ export function useScanner(onFrame: (bytes: Uint8Array) => boolean) {
     const boxes = res.detections.map((d) => ({ points: d.points, ok: d.bytes ? onFrameRef.current(d.bytes) : false }));
     // 読む範囲は、正しく読めた QR の位置から決める（QR でない模様や、無関係の QR の位置に固定されないように）
     roiRef.current = nextRoi(roiRef.current, boxes.filter((b) => b.ok).map((b) => b.points), res.width, res.height);
-    if (boxes.length) setOverlay({ width: res.width, height: res.height, boxes, time: performance.now() });
+    // 停止した後に届いた読み取り結果では枠を出さない（止めた映像の上に枠が残るため）
+    if (boxes.length && runningRef.current) setOverlay({ width: res.width, height: res.height, boxes, time: performance.now() });
     const c = countRef.current;
     c.n++;
     const now = performance.now();

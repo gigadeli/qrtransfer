@@ -162,10 +162,10 @@ export default function App() {
   const lacking = snap.total - snap.received;
   const repairing = snap.repair && lacking > 0 && !snap.finishing;
   const lossHigh = snap.loss !== null && snap.loss >= LOSS_WARN;
-  const overlay = scanner.overlay && performance.now() - scanner.overlay.time < OVERLAY_TTL_MS ? scanner.overlay : null;
+  const overlay = scanner.running && scanner.overlay && performance.now() - scanner.overlay.time < OVERLAY_TTL_MS ? scanner.overlay : null;
 
   return (
-    <div className="app">
+    <div className={`app ${scanner.running ? "scanning" : ""}`}>
       <header className="top">
         <span className="logo" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
