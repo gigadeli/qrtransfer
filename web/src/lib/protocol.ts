@@ -14,7 +14,12 @@ export const TYPE_REPAIR = 2;
 export const HEADER_SIZE = 16;
 export const CRC_SIZE = 4;
 export const OVERHEAD = HEADER_SIZE + CRC_SIZE;
-const SUPPORTED_VERSIONS = new Set([1]);
+const VERSION = 1;
+const SUPPORTED_VERSIONS = new Set([VERSION]);
+const U32_MAX = 0xffffffff;
+
+/** DATA 20 枚ごとに META を 1 枚挟む（Python 版 protocol.META_INTERVAL） */
+export const META_INTERVAL = 20;
 
 export interface Frame {
   type: number;
@@ -39,6 +44,55 @@ export function parseFrame(data: Uint8Array | null | undefined): Frame | null {
   const total = view.getUint32(12);
   if (type === TYPE_DATA && seq >= total) return null;
   return { type, sessionId, seq, total, payload: data.slice(HEADER_SIZE, data.length - CRC_SIZE) };
+}
+
+/** フレームを組み立てる（Python 版 protocol.build_frame と同じバイト列になる）。 */
+export function buildFrame(type: number, sessionId: number, seq: number, total: number, payload: Uint8Array): Uint8Array {
+  if (type !== TYPE_META && type !== TYPE_DATA && type !== TYPE_REPAIR) throw new RangeError(`unknown frame type: ${type}`);
+  for (const [name, v] of [["sessionId", sessionId], ["seq", seq], ["total", total]] as const) {
+    if (!(Number.isInteger(v) && v >= 0 && v <= U32_MAX)) throw new RangeError(`${name} out of range: ${v}`);
+  }
+  const out = new Uint8Array(OVERHEAD + payload.length);
+  const view = new DataView(out.buffer);
+  out[0] = 0x51; // "Q"
+  out[1] = 0x5a; // "Z"
+  out[2] = VERSION;
+  out[3] = type;
+  view.setUint32(4, sessionId);
+  view.setUint32(8, seq);
+  view.setUint32(12, total);
+  out.set(payload, HEADER_SIZE);
+  view.setUint32(out.length - CRC_SIZE, crc32(out, 0, out.length - CRC_SIZE));
+  return out;
+}
+
+// 全角の数字・記号も受け付ける（手入力のため。Python 版 protocol._NORMALIZE と同じ）
+const NORMALIZE: Record<string, string> = Object.fromEntries(
+  [..."０１２３４５６７８９，、－ー―‐〜~　"].map((c, i) => [c, "0123456789,,------ "[i]]),
+);
+
+/**
+ * "1,3-5,7" → {1,3,4,5,7}（Python 版 protocol.parse_ranges と同じ）。
+ * limit を指定すると limit 以上の値を拒否する。空文字列は空集合。不正な入力は Error。
+ */
+export function parseRanges(text: string, limit?: number): Set<number> {
+  const s = [...text].map((c) => NORMALIZE[c] ?? c).join("").replace(/[\r\n]/g, ",");
+  const result = new Set<number>();
+  if (!s.trim()) return result;
+  for (const raw of s.split(",")) {
+    const item = raw.replace(/^[ \t]+|[ \t]+$/g, "");
+    if (!item) throw new Error(`空の項目があります: ${text}`);
+    const m = /^(\d+)(?:\s*-\s*(\d+))?$/.exec(item);
+    if (!m) throw new Error(`番号として読めません: ${raw}`);
+    const start = Number(m[1]);
+    const end = m[2] !== undefined ? Number(m[2]) : start;
+    if (end < start) throw new Error(`範囲が逆です: ${raw}`);
+    if (limit !== undefined && end >= limit) throw new Error(`番号が大きすぎます（${limit - 1} まで）: ${raw}`);
+    if (end > U32_MAX) throw new Error(`番号が大きすぎます: ${raw}`);
+    if (end - start > 10_000_000) throw new Error(`範囲が広すぎます: ${raw}`);
+    for (let v = start; v <= end; v++) result.add(v);
+  }
+  return result;
 }
 
 /** 昇順の [start, end] 区間列（end を含む）。 */

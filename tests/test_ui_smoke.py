@@ -548,3 +548,37 @@ def test_send_multiple_codes_at_once(env, tmp_path, app, codes):
     assert fs.codes == codes % 4 + 1 and fs.state()["codes"] == fs.codes
     fs.close()
     win.close()
+
+
+@pytest.mark.parametrize("codes", [1, 4])
+def test_multiple_codes_flip_one_at_a_time(env, tmp_path, app, codes):
+    """送信中は、並べた QR を 1 つずつ時間をずらして切り替える（切り替わりにかかった撮影で全部が読めなくならないように）。"""
+    from qrtransfer.ui.fullscreen_qr import FullscreenQR
+    from qrtransfer.ui.main_window import MainWindow
+    src = tmp_path / "flip.bin"
+    src.write_bytes(os.urandom(8000))
+    win = MainWindow(env)
+    win.show_sender()
+    plan, cache, seqs = prepare(win.sender, [src])
+    fs = FullscreenQR(plan, cache, seqs, fps=10, codes=codes, fullscreen=False)
+    fs.resize(1600, 900)
+    n = len(fs.order)
+    # 1 つずつ切り替えるので、間隔は 1/(fps × 並べる数)。1 秒あたりに送る QR の数は変わらない
+    assert fs.timer.interval() == round(1000 / (10 * codes))
+    shown = [fs.current_seqs()]
+    for _ in range(n + 3):
+        before = fs.current_seqs()
+        fs.flip()
+        after = fs.current_seqs()
+        assert sum(a != b for a, b in zip(before, after)) == 1  # 変わるのは 1 つだけ
+        assert len(set(after)) == len(after)  # 同じ QR が 2 つ並ばない
+        shown.append(after)
+    # 表示順のすべてを順に出し、1 周したら周回が増える
+    seen = {s for cells in shown for s in cells}
+    assert seen == set(fs.order)
+    assert fs.cycle == 2
+    # コマ送り（←→）は一斉に並べ直す
+    fs.advance()
+    assert fs.cells == [(fs.pos + i) % n for i in range(codes)]
+    fs.close()
+    win.close()

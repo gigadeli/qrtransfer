@@ -2,25 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Assembler, type CompletionResult, type ReceivedFile, type Snapshot } from "./lib/assembler";
 import { hex32, parseFrame } from "./lib/protocol";
 import { ChunkMap } from "./components/ChunkMap";
+import { ModeNav } from "./components/ModeNav";
+import { humanSize, humanTime } from "./lib/format";
 import { Preview } from "./components/Preview";
 import { type CameraMode, useScanner } from "./useScanner";
 
 const OVERLAY_TTL_MS = 400;
 const MISSING_DISPLAY_ITEMS = 200;
 
-export function humanSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(2)} MB`;
-}
-
-export function humanTime(sec: number): string {
-  const s = Math.round(sec);
-  if (s < 60) return `${s} 秒`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m} 分 ${s % 60} 秒`;
-  return `${Math.floor(m / 60)} 時間 ${m % 60} 分`;
-}
 
 /** 取りこぼしがこの割合を超えたら、送信側の設定を見直すよう知らせる */
 const LOSS_WARN = 0.3;
@@ -167,13 +156,7 @@ export default function App() {
   return (
     <div className={`app ${scanner.running ? "scanning" : ""}`}>
       <header className="top">
-        <span className="logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M5 14v5h14v-5M12 4v11M8 11l4 4 4-4" />
-          </svg>
-        </span>
-        <h1>QRTransfer</h1>
-        <span className="muted">受信</span>
+        <ModeNav current="receive" />
         <span className="build muted">{__BUILD_INFO__}</span>
       </header>
 
@@ -225,7 +208,7 @@ export default function App() {
                   <button className="primary big" onClick={() => void scanner.start()}>
                     カメラを起動
                   </button>
-                  <p className="muted">パソコンの QRTransfer で送信を始め、画面の QR にカメラを向けてください</p>
+                  <p className="muted">送信側（QRTransfer のアプリか、このサイトの送信ページ）で送信を始め、画面の QR にカメラを向けてください</p>
                 </>
               )}
             </div>

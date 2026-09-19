@@ -20,6 +20,64 @@ export interface Meta {
 const isInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v);
 const isSha = (v: unknown) => typeof v === "string" && v.length === 64;
 
+export const CHUNK_SIZE_DEFAULT = 800;
+export const CHUNK_SIZE_MIN = 200;
+export const CHUNK_SIZE_MAX = 2000;
+/** META が収まるバージョンを決めるときに確保するファイル名の長さ（Python 版 packer.META_NAME_MIN_BYTES） */
+export const META_NAME_MIN_BYTES = 64;
+
+const utf8 = new TextEncoder();
+const byteLen = (s: string) => utf8.encode(s).length;
+
+/** META の JSON（Python 版 packer._json_bytes と同じ。キーの順・区切り・非 ASCII をそのまま出す点も同じ） */
+export function metaJson(meta: Meta): Uint8Array {
+  return utf8.encode(JSON.stringify(meta));
+}
+
+function splitExt(name: string): [string, string] {
+  // Python の os.path.splitext と同じ（先頭のドットは拡張子とみなさない）
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || name.slice(0, dot).split("").every((c) => c === ".")) return [name, ""];
+  return [name.slice(0, dot), name.slice(dot)];
+}
+
+/** UTF-8 で maxBytes 以下になるように、拡張子を残して切り詰める（Python 版 packer.truncate_name） */
+export function truncateName(name: string, maxBytes: number): string {
+  if (byteLen(name) <= maxBytes) return name;
+  let [stem, ext] = splitExt(name);
+  if (byteLen(ext) > Math.floor(maxBytes / 2)) ext = "";
+  const budget = maxBytes - byteLen(ext) - byteLen("~");
+  if (budget <= 0) {
+    let out = "";
+    for (const ch of name) {
+      if (byteLen(out + ch) > maxBytes) break;
+      out += ch;
+    }
+    return out;
+  }
+  let out = "";
+  for (const ch of stem) {
+    if (byteLen(out + ch) > budget) break;
+    out += ch;
+  }
+  return `${out}~${ext}`;
+}
+
+/** META の JSON を作る。maxBytes に収まらない場合は name を切り詰める（Python 版 packer.meta_payload） */
+export function metaPayload(meta: Meta, maxBytes?: number): Uint8Array {
+  let data = metaJson(meta);
+  if (maxBytes === undefined || data.length <= maxBytes) return data;
+  const base = metaJson({ ...meta, name: "" }).length;
+  let budget = maxBytes - base;
+  if (budget < 1) throw new RangeError("META does not fit even with an empty name");
+  while (budget >= 1) {
+    data = metaJson({ ...meta, name: truncateName(meta.name, budget) });
+    if (data.length <= maxBytes) return data;
+    budget -= Math.max(1, data.length - maxBytes);
+  }
+  throw new RangeError("META does not fit");
+}
+
 export function totalChunks(payloadSize: number, chunkSize: number): number {
   return payloadSize > 0 ? Math.ceil(payloadSize / chunkSize) : 0;
 }

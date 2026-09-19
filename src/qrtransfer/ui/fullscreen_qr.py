@@ -48,8 +48,10 @@ class FullscreenQR(QWidget):
         wait_for_start=True のときは、最初の QR（META）を静止表示した「待機中」の状態で開き、
         Space / Enter キー（またはクリック）で送信を始める。受信側はその間にカメラの位置やピントを合わせられる。
 
-        codes: 同時に並べて表示する QR の数。カルーセルの順に codes 枚ずつ表示し、1 回の切り替えで codes 枚進む
-        （各 QR は独立したフレームなので、受信側は読めたものから使う）。
+        codes: 同時に並べて表示する QR の数。カルーセルの順に codes 枚ずつ表示する（各 QR は独立したフレームなので、
+        受信側は読めたものから使う）。送信中は並べた QR を 1 つずつ時間をずらして切り替える（1 周期の 1/codes ずつ）。
+        全部を同時に切り替えると、切り替わりの瞬間にかかった撮影では全部が前後の QR の混ざった画像になるが、
+        ずらせば混ざるのは 1 つだけで済む。各 QR の表示時間（1/fps）と、1 秒あたりに送る QR の数は変わらない。
         """
         super().__init__(parent)
         self.setWindowTitle(f"QRTransfer - 送信中: {plan.meta.get('name', '')}")
@@ -73,13 +75,18 @@ class FullscreenQR(QWidget):
         self.resend: set[int] | None = None
         self.repairs = sum(1 for s in frame_seqs if packer.repair_index(s) is not None)
         self.order = packer.carousel_order(plan.total, repairs=self.repairs)
-        self.pos = 0
+        self.pos = 0  # 1 つ目の QR の表示順の位置（一斉に並べ直したときの基準）
         self.cycle = 1
+        # 並べた QR それぞれが表示している表示順の位置と、次に切り替える QR・次に出す位置（時間差の切り替え用）
+        self.cells: list[int] = []
+        self.cursor = 0
+        self.next_pos = 0
         self._image_cache: dict[int, QImage] = {}
+        self._set_contiguous(0)
 
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self.timer.timeout.connect(self.advance)
+        self.timer.timeout.connect(self.flip)
         self._apply_fps()
 
     # ------------------------------------------------------------------ 制御
@@ -94,7 +101,7 @@ class FullscreenQR(QWidget):
             return
         self.waiting = False
         self.paused = False
-        self.pos = 0
+        self._set_contiguous(0)
         self.cycle = 1
         self.timer.start()
         self.update()
@@ -155,38 +162,69 @@ class FullscreenQR(QWidget):
                 "geometry": bytes(geometry.data()) if geometry is not None else b""}
 
     def _apply_fps(self) -> None:
-        self.timer.setInterval(max(1, round(1000 / self.fps)))
+        # 並べた QR を 1 つずつ切り替えるので、切り替えの間隔は 1/(fps × 並べる数)
+        self.timer.setInterval(max(1, round(1000 / (self.fps * self.shown()))))
 
     def current_seq(self) -> int:
-        return self.order[self.pos]
+        return self.order[self.cells[0]]
 
     def shown(self) -> int:
         """1 回に表示する QR の数（1 周の枚数より多くは並べない。同じ QR が 2 つ並ばないように）。"""
         return max(1, min(self.codes, len(self.order)))
 
     def current_seqs(self) -> list[int]:
+        """表示中の QR（並べた位置の順）。"""
+        return [self.order[c] for c in self.cells]
+
+    def _set_contiguous(self, start: int) -> None:
+        """start から続けて並べ直す（一斉に切り替える。開始・コマ送り・並べる数の変更のとき）。"""
         n = len(self.order)
-        return [self.order[(self.pos + i) % n] for i in range(self.shown())]
+        self.pos = start % n
+        self.cells = [(self.pos + i) % n for i in range(self.shown())]
+        self.cursor = 0
+        self.next_pos = self.pos + self.shown()
 
     def set_codes(self, codes: int) -> None:
         self.codes = max(1, min(CODES_MAX, codes))
+        self._set_contiguous(self.pos)
+        self._apply_fps()
         self.update()
 
     def advance(self, step: int = 1) -> None:
-        """表示を step 回分進める（1 回分は、並べて表示する QR の数だけ進む）。"""
+        """表示を step 回分進める（1 回分は、並べて表示する QR の数だけ進む）。並べた QR を一斉に切り替える。"""
         n = len(self.order)
         new = self.pos + step * self.shown()
         if new >= n:
             self.cycle += new // n
         elif new < 0:
             self.cycle = max(1, self.cycle - 1)
-        self.pos = new % n
+        self._set_contiguous(new % n)
         self.update()
+
+    def flip(self) -> None:
+        """送信中の切り替え: 並べた QR のうち 1 つだけを、次の QR に替える（順番に 1 つずつ）。"""
+        n = len(self.order)
+        if self.next_pos >= n:
+            self.next_pos %= n
+            self.cycle += 1
+        index = self.cursor
+        self.cells[index] = self.next_pos
+        self.next_pos += 1
+        self.cursor = (self.cursor + 1) % len(self.cells)
+        if self.cursor == 0:
+            self.pos = self.cells[0]
+        rects = self.qr_rects()
+        if len(rects) == len(self.cells):
+            self.update(rects[index])  # 替えた QR の所だけ描き直す
+            self.update(QRect(0, self.height() - TEXT_AREA, self.width(), TEXT_AREA))
+        else:
+            self.update()
 
     def set_resend(self, seqs: set[int] | None) -> None:
         self.resend = seqs if seqs else None
         self.order = packer.carousel_order(self.plan.total, self.resend, repairs=self.repairs)
-        self.pos = 0
+        self._set_contiguous(0)
+        self._apply_fps()
         self.cycle = 1
         self.update()
 

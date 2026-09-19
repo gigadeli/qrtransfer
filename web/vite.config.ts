@@ -38,9 +38,13 @@ function offline(): Plugin {
 }
 
 /** ページに表示する版: アプリのバージョン（Python 版と共通）・コミット・ビルド日時。更新されたかを見分けられるように。 */
-function buildInfo(): string {
+function appVersion(): string {
   const init = readFileSync(resolve(import.meta.dirname, "../src/qrtransfer/__init__.py"), "utf-8");
-  const version = /__version__\s*=\s*"([^"]+)"/.exec(init)?.[1] ?? "?";
+  return /__version__\s*=\s*"([^"]+)"/.exec(init)?.[1] ?? "?";
+}
+
+function buildInfo(): string {
+  const version = appVersion();
   let commit = process.env.GITHUB_SHA ?? "";
   if (!commit) {
     try {
@@ -57,9 +61,14 @@ function buildInfo(): string {
 export default defineConfig({
   base: process.env.QRT_BASE ?? "/",
   plugins: [react(), offline()],
-  define: { __BUILD_INFO__: JSON.stringify(buildInfo()) },
+  // __APP_VERSION__ は送信する META の app_version に入れる（Python 版と同じ番号）
+  define: { __BUILD_INFO__: JSON.stringify(buildInfo()), __APP_VERSION__: JSON.stringify(appVersion()) },
   worker: { format: "es" },
-  build: { target: "es2022" },
+  // 受信（index.html）と送信（send.html）の 2 ページ
+  build: {
+    target: "es2022",
+    rollupOptions: { input: { main: resolve(import.meta.dirname, "index.html"), send: resolve(import.meta.dirname, "send.html") } },
+  },
   test: {
     environment: "node",
     setupFiles: ["test/setup.ts"],

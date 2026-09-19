@@ -47,7 +47,12 @@ async function navigate(request) {
   } catch {
     /* オフライン */
   }
-  return (await cache.match(INDEX, { ignoreVary: true })) ?? Response.error();
+  // 開こうとしたページ（受信・送信）を返す。見つからなければ受信ページ
+  return (
+    (await cache.match(request, { ignoreSearch: true, ignoreVary: true })) ??
+    (await cache.match(INDEX, { ignoreVary: true })) ??
+    Response.error()
+  );
 }
 
 /**

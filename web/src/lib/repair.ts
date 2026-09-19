@@ -7,6 +7,25 @@
 
 export const DEGREE_MAX = 1024;
 export const TOTAL_LIMIT = 2 ** 21; // 番号の計算（next() * n）を 2^53 未満に収めるため
+export const RATIO_DEFAULT = 50; // 修復用フレームの枚数（全チャンク数に対する %）
+export const RATIO_MIN = 10;
+export const RATIO_MAX = 200;
+
+/** 送信側で作る修復用フレームの枚数（Python 版 repair.repair_count）。0 なら修復用フレームを使わない */
+export function repairCount(total: number, ratio: number): number {
+  if (ratio <= 0 || total < 2 || total >= TOTAL_LIMIT) return 0;
+  return Math.max(4, Math.ceil((total * ratio) / 100));
+}
+
+/**
+ * index 番目の修復用フレームの payload（長さ chunkSize）。chunk(i) は i 番目のチャンク。
+ * 短い最終チャンクは 0 で埋めて重ねる（Python 版 repair.encode と同じ）。
+ */
+export function encodeRepair(chunk: (i: number) => Uint8Array, total: number, chunkSize: number, sessionId: number, index: number): Uint8Array {
+  const out = new Uint8Array(chunkSize);
+  for (const i of repairIndices(sessionId, index, total)) xorBytes(out, chunk(i));
+  return out;
+}
 const MEMORY_LIMIT = 64 * 1024 * 1024; // まだ解けていない式を保持する上限（バイト）
 
 export function degree(total: number): number {
@@ -57,7 +76,7 @@ function xorInto(dst: Uint32Array, src: Uint32Array): void {
 }
 
 /** dst ^= src（src の長さまで）。両方が 4 バイト境界にあれば 4 バイトずつ計算する（1 バイトずつの約 4 倍速い）。 */
-function xorBytes(dst: Uint8Array, src: Uint8Array): void {
+export function xorBytes(dst: Uint8Array, src: Uint8Array): void {
   const n = Math.min(dst.length, src.length);
   let i = 0;
   if (dst.byteOffset % 4 === 0 && src.byteOffset % 4 === 0) {
