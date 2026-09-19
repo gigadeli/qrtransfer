@@ -68,7 +68,12 @@ function NumberField({
   onChange: (v: number) => void;
 }) {
   const [text, setText] = useState(String(value));
-  useEffect(() => setText(String(value)), [value]);
+  // 外から値が変わったら（保存した設定の読み込みなど）、描画の中で表示を合わせる（useEffect で後から直さない）
+  const [shown, setShown] = useState(value);
+  if (shown !== value) {
+    setShown(value);
+    setText(String(value));
+  }
   const commit = () => {
     const n = Number(text);
     if (!text.trim() || !Number.isFinite(n)) return setText(String(value));

@@ -5,6 +5,11 @@
  * ライト／ダークは端末の設定に合わせ、透明度を下げる設定の端末では不透明な面に切り替える。
  */
 :root {
+  /* 重ね順の段階（これ以外の値は使わない） */
+  --z-behind: -1;
+  --z-raised: 1;
+  --z-player: 1000;
+  --z-dialog: 1100;
   --bg: #eef1f8;
   --text: #121620;
   --muted: #5d6576;
@@ -105,7 +110,7 @@ body::before {
   content: "";
   position: fixed;
   inset: 0;
-  z-index: -1;
+  z-index: var(--z-behind);
   pointer-events: none;
   background:
     radial-gradient(60vmax 60vmax at 5% 0%, var(--blob1), transparent 60%),
@@ -161,7 +166,7 @@ select,
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
   pointer-events: none;
-  z-index: 1;
+  z-index: var(--z-raised);
 }
 
 .top {
@@ -219,6 +224,12 @@ h2 {
 
 p {
   margin: 4px 0;
+  text-wrap: pretty;
+}
+
+h1,
+h2 {
+  text-wrap: balance;
 }
 
 .muted {
@@ -243,7 +254,6 @@ p {
   background: var(--preview-bg);
   aspect-ratio: 4 / 3;
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
-  transition: aspect-ratio 0.3s;
 }
 
 .camera.on .viewport {
@@ -407,7 +417,7 @@ select {
     0 2px 8px rgb(30 45 90 / 0.08);
   transition:
     background 0.15s,
-    transform 0.15s cubic-bezier(0.3, 1.6, 0.5, 1),
+    transform 0.15s ease-out,
     box-shadow 0.15s;
 }
 
@@ -527,7 +537,7 @@ button.ghost {
   margin: 4px 0;
   cursor: pointer;
   overflow: visible;
-  transition: background 0.25s, box-shadow 0.25s;
+  transition: background 0.2s;
 }
 
 .switch input:checked {
@@ -538,7 +548,7 @@ button.ghost {
     0 2px 10px rgb(43 209 79 / 0.3);
 }
 
-/* つまみ */
+/* つまみ（横に滑るだけ。動かすのは transform のみ） */
 .switch input::after {
   content: "";
   position: absolute;
@@ -548,46 +558,14 @@ button.ghost {
   height: 26px;
   border-radius: 50%;
   background: var(--switch-knob);
-  border: 0 solid rgb(255 255 255 / 0.95);
   box-shadow:
     0 1px 2px rgb(0 0 0 / 0.16),
     0 3px 8px rgb(0 0 0 / 0.14);
-  transition:
-    transform 0.4s cubic-bezier(0.3, 1.45, 0.5, 1),
-    background 0.2s,
-    border-width 0.2s,
-    box-shadow 0.2s;
-}
-
-/* ガラスのレンズ（ON のとき・押している間） */
-.switch input:checked::after,
-.switch input:active::after {
-  background:
-    radial-gradient(circle at 50% 38%, rgb(255 255 255 / 0.4), rgb(255 255 255 / 0.12) 55%, rgb(255 255 255 / 0.04) 68%, transparent 70%),
-    rgb(255 255 255 / 0.1);
-  border-width: 1.5px;
-  box-shadow:
-    inset 0 0 0 2px rgb(255 255 255 / 0.35),
-    inset 0 0 4px 3px var(--lens-ring, rgb(255 255 255 / 0.55)),
-    inset 0 1px 1px rgb(255 255 255 / 0.9),
-    0 0 0 1px rgb(255 255 255 / 0.45),
-    0 4px 12px rgb(0 0 0 / 0.16);
-}
-
-.switch input:checked {
-  --lens-ring: rgb(90 255 120 / 0.8);
+  transition: transform 0.2s ease-out;
 }
 
 .switch input:checked::after {
-  transform: translateX(24px) scale(1.4);
-}
-
-.switch input:not(:checked):active::after {
-  transform: translateX(3px) scale(1.4);
-}
-
-.switch input:checked:active::after {
-  transform: translateX(21px) scale(1.5);
+  transform: translateX(24px);
 }
 
 /* 二択の切り替え（つまみが選んだ側へ滑る） */
@@ -613,19 +591,17 @@ button.ghost {
   width: calc((100% - 6px) / var(--count));
   border-radius: 999px;
   background: var(--glass-strong);
-  -webkit-backdrop-filter: blur(8px) saturate(180%);
-  backdrop-filter: blur(8px) saturate(180%);
   border: 1px solid var(--glass-line);
   box-shadow:
     inset 0 1px 0 var(--glass-edge),
     0 2px 8px rgb(0 0 0 / 0.12);
   transform: translateX(calc(100% * var(--index)));
-  transition: transform 0.3s cubic-bezier(0.3, 1.3, 0.5, 1);
+  transition: transform 0.2s ease-out;
 }
 
 .segmented button {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-raised);
   background: transparent;
   border: 0;
   box-shadow: none;
@@ -721,6 +697,7 @@ dl {
   gap: 7px 14px;
   margin: 0 0 12px;
   align-items: center;
+  font-variant-numeric: tabular-nums; /* 大きさ・枚数・時間が変わっても桁の位置がずれないように */
 }
 
 dt {
@@ -754,7 +731,6 @@ dd {
   background:
     linear-gradient(180deg, rgb(255 255 255 / 0.45), rgb(255 255 255 / 0) 60%),
     linear-gradient(90deg, #4f8cff, var(--accent));
-  transition: width 0.25s;
 }
 
 .bar > div:first-child {
@@ -863,6 +839,10 @@ dd .muted {
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.5), 0 2px 8px rgb(220 38 38 / 0.4);
 }
 
+.result p {
+  font-variant-numeric: tabular-nums;
+}
+
 .result .name {
   font-size: 18px;
   font-weight: 700;
@@ -871,7 +851,7 @@ dd .muted {
 
 /* 結果が出たときに浮かび上がる */
 .result {
-  animation: rise 0.45s cubic-bezier(0.25, 1.3, 0.5, 1);
+  animation: rise 0.2s ease-out;
 }
 
 @keyframes rise {
@@ -997,7 +977,7 @@ dd .muted {
 
 .segmented.modes a {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-raised);
   display: grid;
   place-items: center;
   min-height: 30px;
@@ -1166,7 +1146,7 @@ input[type="range"] {
 .player {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: var(--z-player);
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -1182,6 +1162,7 @@ input[type="range"] {
   place-items: center;
   overflow: hidden;
   background: #fff;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px);
 }
 
 .qr-canvas {
@@ -1196,7 +1177,8 @@ input[type="range"] {
   align-items: center;
   justify-content: space-between;
   gap: 6px 14px;
-  padding: 6px 12px calc(env(safe-area-inset-bottom, 0px) + 8px);
+  padding: 6px calc(env(safe-area-inset-right, 0px) + 12px) calc(env(safe-area-inset-bottom, 0px) + 8px)
+    calc(env(safe-area-inset-left, 0px) + 12px);
   border-top: 1px solid #e6e8ec;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -1266,7 +1248,7 @@ input[type="range"] {
 .dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 1100;
+  z-index: var(--z-dialog);
   display: grid;
   place-items: center;
   padding: 16px;
